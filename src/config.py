@@ -40,6 +40,7 @@ class Config:
     spotify_client_secret: str
     spotify_redirect_uri: str
     claude_model: str
+    shim_model: str
     close_phrases: tuple[str, ...]
     silence_timeout_s: int
     max_recording_s: int
@@ -97,6 +98,7 @@ def load() -> Config:
             "SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8080/callback"
         ),
         claude_model=data.get("claude_model", "claude-sonnet-4-6"),
+        shim_model=data.get("shim_model", "haiku"),
         close_phrases=tuple(data.get("close_phrases", [])),
         silence_timeout_s=int(data.get("silence_timeout_s", 300)),
         max_recording_s=int(data.get("max_recording_s", 15)),

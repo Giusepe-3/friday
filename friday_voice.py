@@ -68,6 +68,7 @@ async def _claude_ask(
     prompt: str,
     session_id: str,
     first_turn: bool,
+    model: str = "haiku",
     timeout_s: int = 90,
 ) -> str:
     """Call `claude -p` and return the response text.
@@ -77,11 +78,13 @@ async def _claude_ask(
     if first_turn:
         args = ["claude", "-p", prompt,
                 "--session-id", session_id,
+                "--model", model,
                 "--output-format", "json",
                 "--permission-mode", "bypassPermissions"]
     else:
         args = ["claude", "-p", prompt,
                 "--resume", session_id,
+                "--model", model,
                 "--output-format", "json",
                 "--permission-mode", "bypassPermissions"]
 
@@ -169,7 +172,7 @@ async def main() -> None:
                 tts.speak("Done, boss.")
                 break
 
-            reply = await _claude_ask(transcript, session_id, first_turn)
+            reply = await _claude_ask(transcript, session_id, first_turn, model=cfg.shim_model)
             first_turn = False
             print(f"[shim] reply: {reply[:80]!r}…", flush=True)
             if reply:
