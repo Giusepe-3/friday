@@ -73,13 +73,15 @@ def _init_research(cfg):
         return None
 
 
-async def record_until_silence(vad: VAD, max_s: int) -> bytes:
-    """Return captured PCM, or b'' if VAD never detected real speech.
+async def record_until_silence(vad: VAD, max_s: int, min_speech_frames: int = 10) -> bytes:
+    """Return captured PCM, or b'' if no real speech detected.
 
-    Empty return suppresses downstream STT calls that would otherwise
-    hallucinate ("Thank you." / "Bye." / etc.) on silent buffers."""
+    Rejects (a) fully silent buffers and (b) sub-300ms blips that Whisper
+    hallucinates on ('Bye.' / 'Thank you.'). ``min_speech_frames`` = 10 at
+    30 ms per frame ≈ 300 ms minimum actual speech before we bother with STT."""
     buf = bytearray()
     speech_seen = False
+    speech_frames = 0
     silent = 0
     max_frames = (max_s * 1000) // vad.frame_ms
     frames = 0
@@ -88,6 +90,7 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
         frames += 1
         if vad.is_speech(frame):
             speech_seen = True
+            speech_frames += 1
             silent = 0
         elif speech_seen:
             silent += 1
@@ -95,7 +98,9 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
                 break
         if frames >= max_frames:
             break
-    return bytes(buf) if speech_seen else b""
+    if not speech_seen or speech_frames < min_speech_frames:
+        return b""
+    return bytes(buf)
 
 
 def _build_session_prompt(memory: Memory, research) -> str:
