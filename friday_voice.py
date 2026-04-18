@@ -1,21 +1,27 @@
-"""FRIDAY voice shim for Claude Code CLI.
+"""FRIDAY voice shim for Claude Code.
 
 Lean replacement for friday.py:
 - Wake word + VAD + STT + TTS reuses the existing src/* pipeline
-- Brain is `claude -p <text> --session-id/--resume <uuid>` subprocess
+- Brain is a persistent `ClaudeSDKClient` per FRIDAY-session. The SDK speaks
+  stream-json over stdin/stdout to one long-lived Claude Code CLI subprocess
+  for the whole session — follow-up turns skip subprocess + MCP cold-start.
 - Personality + memory + tools come from CLAUDE.md + .mcp.json (auto-loaded
-  by Claude Code when invoked in this repo's cwd)
+  by Claude Code when ``cwd`` is the repo root).
 
 Keeps `friday.py` untouched so you can compare runtimes side-by-side."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 import signal
-import uuid
 from datetime import datetime
+from pathlib import Path
+
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+)
 
 from src import audio
 from src import config as cfg_mod
@@ -24,6 +30,9 @@ from src.stt import STT
 from src.tts import TTS
 from src.vad import VAD
 from src.wake import listen_for_wake
+
+
+REPO_ROOT = Path(__file__).resolve().parent
 
 
 _HALLUCINATION_SHORT = {
@@ -64,58 +73,45 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
     return bytes(buf) if speech_seen else b""
 
 
-async def _claude_ask(
-    prompt: str,
-    session_id: str,
-    first_turn: bool,
-    model: str = "haiku",
-    timeout_s: int = 90,
-) -> str:
-    """Call `claude -p` and return the response text.
+class ShimBrain:
+    """Persistent ClaudeSDKClient per FRIDAY-session.
 
-    Uses --session-id on first turn to create the session; --resume on
-    subsequent turns to continue it. Prints debug to stderr."""
-    if first_turn:
-        args = ["claude", "-p", prompt,
-                "--session-id", session_id,
-                "--model", model,
-                "--output-format", "json",
-                "--permission-mode", "bypassPermissions"]
-    else:
-        args = ["claude", "-p", prompt,
-                "--resume", session_id,
-                "--model", model,
-                "--output-format", "json",
-                "--permission-mode", "bypassPermissions"]
+    Options leave ``mcp_servers`` and ``system_prompt`` unset so Claude Code
+    auto-loads ``.mcp.json`` + ``CLAUDE.md`` from ``cwd``. ``setting_sources``
+    defaults to ``['user', 'project']`` inside the SDK."""
 
-    print(f"[shim] claude -p (session={session_id[:8]}, first={first_turn})", flush=True)
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return "Brain timed out, boss."
+    def __init__(self, cwd: Path, model: str = "haiku") -> None:
+        self._cwd = str(cwd)
+        self._model = model
+        self._client: ClaudeSDKClient | None = None
 
-    if proc.returncode != 0:
-        err_tail = (stderr or b"")[-400:].decode("utf-8", errors="replace")
-        print(f"[shim] claude exit {proc.returncode}: {err_tail}", flush=True)
-        return "Brain's offline. Try again."
+    async def start(self) -> None:
+        await self.stop()
+        options = ClaudeAgentOptions(
+            model=self._model,
+            cwd=self._cwd,
+            permission_mode="bypassPermissions",
+        )
+        self._client = ClaudeSDKClient(options=options)
+        await self._client.connect()
 
-    raw = stdout.decode("utf-8", errors="replace").strip()
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        # Fallback: take raw text as reply
-        return raw.strip()
+    async def ask(self, user_text: str) -> str:
+        if self._client is None:
+            raise RuntimeError("ShimBrain.ask called before start()")
+        await self._client.query(user_text)
+        final = ""
+        async for msg in self._client.receive_response():
+            if isinstance(msg, ResultMessage):
+                final = getattr(msg, "result", "") or final
+        return final
 
-    for key in ("result", "response", "content", "text"):
-        if isinstance(payload.get(key), str):
-            return payload[key].strip()
-    return str(payload)
+    async def stop(self) -> None:
+        if self._client is not None:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+            self._client = None
 
 
 async def main() -> None:
@@ -128,6 +124,7 @@ async def main() -> None:
     )
     stt = STT(cfg.groq_api_key)
     vad = VAD()
+    brain = ShimBrain(cwd=REPO_ROOT, model=cfg.shim_model)
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -137,7 +134,7 @@ async def main() -> None:
     except NotImplementedError:
         pass
 
-    print("[shim] ready — claude CLI backend, CLAUDE.md persona, .mcp.json tools", flush=True)
+    print(f"[shim] ready — persistent ClaudeSDKClient, model={cfg.shim_model}, CLAUDE.md+.mcp.json auto-loaded from cwd", flush=True)
 
     while not stop.is_set():
         print(f"[shim] awaiting wake word '{cfg.wake_model}'", flush=True)
@@ -145,38 +142,43 @@ async def main() -> None:
         print("[shim] wake fired", flush=True)
         tts.speak("Yes, boss.")
 
-        session_id = str(uuid.uuid4())
-        first_turn = True
+        print("[shim] starting persistent brain session…", flush=True)
+        await brain.start()
+        print("[shim] brain ready", flush=True)
         session_start = datetime.now()
 
-        while True:
-            # safety timeout per session
-            if (datetime.now() - session_start).total_seconds() > cfg.silence_timeout_s:
-                tts.speak("Closing out, boss.")
-                break
+        try:
+            while True:
+                # safety timeout per session
+                if (datetime.now() - session_start).total_seconds() > cfg.silence_timeout_s:
+                    tts.speak("Closing out, boss.")
+                    break
 
-            print("[shim] listening (VAD-bounded)…", flush=True)
-            pcm = await record_until_silence(vad, cfg.max_recording_s)
-            if not pcm:
-                print("[shim] no speech, skipping", flush=True)
-                continue
+                print("[shim] listening (VAD-bounded)…", flush=True)
+                pcm = await record_until_silence(vad, cfg.max_recording_s)
+                if not pcm:
+                    print("[shim] no speech, skipping", flush=True)
+                    continue
 
-            transcript = await stt.transcribe(pcm, cfg.sample_rate)
-            print(f"[shim] transcript: {transcript!r}", flush=True)
-            if not transcript.strip():
-                continue
-            if _looks_like_hallucination(transcript):
-                print("[shim] filtered hallucination", flush=True)
-                continue
-            if is_close_phrase(transcript, cfg.close_phrases):
-                tts.speak("Done, boss.")
-                break
+                transcript = await stt.transcribe(pcm, cfg.sample_rate)
+                print(f"[shim] transcript: {transcript!r}", flush=True)
+                if not transcript.strip():
+                    continue
+                if _looks_like_hallucination(transcript):
+                    print("[shim] filtered hallucination", flush=True)
+                    continue
+                if is_close_phrase(transcript, cfg.close_phrases):
+                    tts.speak("Done, boss.")
+                    break
 
-            reply = await _claude_ask(transcript, session_id, first_turn, model=cfg.shim_model)
-            first_turn = False
-            print(f"[shim] reply: {reply[:80]!r}…", flush=True)
-            if reply:
-                tts.speak(reply)
+                t0 = datetime.now()
+                reply = await brain.ask(transcript)
+                dt = (datetime.now() - t0).total_seconds()
+                print(f"[shim] reply ({dt:.1f}s): {reply[:80]!r}…", flush=True)
+                if reply:
+                    tts.speak(reply)
+        finally:
+            await brain.stop()
 
 
 if __name__ == "__main__":
