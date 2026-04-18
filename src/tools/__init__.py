@@ -1,12 +1,12 @@
 """MCP server factory + allowed-tool list for FRIDAY.
 
-Phase 4: adds Spotify, notes, briefing tools."""
+Phase 5: adds alarm tools."""
 
 from __future__ import annotations
 
 from claude_agent_sdk import create_sdk_mcp_server
 
-from . import briefing_tool, notes_tool, spotify_tool, util_tool
+from . import alarm_tool, briefing_tool, notes_tool, spotify_tool, util_tool
 
 
 ALLOWED_TOOL_NAMES = [
@@ -18,6 +18,9 @@ ALLOWED_TOOL_NAMES = [
     "mcp__friday__set_volume",
     "mcp__friday__write_note",
     "mcp__friday__read_briefing",
+    "mcp__friday__set_alarm",
+    "mcp__friday__cancel_alarm",
+    "mcp__friday__list_alarms",
 ]
 
 
@@ -34,5 +37,8 @@ def build_server():
             spotify_tool.set_volume,
             notes_tool.write_note,
             briefing_tool.read_briefing,
+            alarm_tool.set_alarm,
+            alarm_tool.cancel_alarm,
+            alarm_tool.list_alarms,
         ],
     )

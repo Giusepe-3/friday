@@ -1,4 +1,4 @@
-"""FRIDAY entrypoint — Phase 4: Spotify + notes + briefing wired."""
+"""FRIDAY entrypoint — Phase 5: alarms online."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from src import audio
 from src import config as cfg_mod
 from src import personality
 from src.brain import Brain
+from src.scheduler import AlarmScheduler
 from src.session import Session, State, is_close_phrase
 from src.stt import STT
 from src.tts import TTS
@@ -91,7 +92,16 @@ async def main() -> None:
     stt = STT(cfg.groq_api_key)
     vad = VAD()
     sp = _init_spotify(cfg)
-    tool_state.init(cfg=cfg, speak=tts.speak, spotify=sp)
+
+    scheduler = AlarmScheduler(cfg.paths.alarms_json, speak=tts.speak)
+    await scheduler.start()
+
+    tool_state.init(
+        cfg=cfg,
+        speak=tts.speak,
+        spotify=sp,
+        scheduler=scheduler,
+    )
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -102,18 +112,21 @@ async def main() -> None:
         pass
 
     print("[friday] ready, listening for wake word")
-    while not stop.is_set():
-        await listen_for_wake(cfg.wake_model, cfg.wake_threshold)
-        tts.speak("Yes, boss.")
-        session = Session(state=State.ACTIVE)
-        try:
-            await asyncio.wait_for(
-                session_loop(cfg, brain, stt, vad, tts, session),
-                timeout=cfg.silence_timeout_s,
-            )
-        except asyncio.TimeoutError:
-            tts.speak("Closing out, boss.")
-            session.state = State.IDLE
+    try:
+        while not stop.is_set():
+            await listen_for_wake(cfg.wake_model, cfg.wake_threshold)
+            tts.speak("Yes, boss.")
+            session = Session(state=State.ACTIVE)
+            try:
+                await asyncio.wait_for(
+                    session_loop(cfg, brain, stt, vad, tts, session),
+                    timeout=cfg.silence_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                tts.speak("Closing out, boss.")
+                session.state = State.IDLE
+    finally:
+        scheduler.sched.shutdown(wait=False)
 
 
 if __name__ == "__main__":
