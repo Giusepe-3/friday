@@ -1,12 +1,4 @@
-"""FRIDAY entrypoint — Phase 6: memory layer complete.
-
-Memory flow:
-* Every session's system prompt includes the last 7 days of summaries and
-  the full ``facts.md`` contents.
-* On session close (explicit phrase or safety timeout), we ask Claude to
-  summarise the turns in 3–5 bullet points and append to today's memory
-  markdown file.
-"""
+"""FRIDAY entrypoint — Phase 9+: research tools + scheduled standups + catchup."""
 
 from __future__ import annotations
 
@@ -29,6 +21,24 @@ from src.tts import TTS
 from src.vad import VAD
 from src.wake import listen_for_wake
 from src.tools import state as tool_state
+
+try:
+    from src.research.storage import ResearchStorage
+except Exception as _e:
+    print(f"[friday] research.storage unavailable: {_e}")
+    ResearchStorage = None
+
+try:
+    from src.research.scheduler import (
+        default_jobs_from_config,
+        register_jobs,
+        catchup_due,
+    )
+except Exception as _e:
+    print(f"[friday] research.scheduler unavailable: {_e}")
+    default_jobs_from_config = None
+    register_jobs = None
+    catchup_due = None
 
 
 SUMMARY_PROMPT = (
@@ -53,6 +63,16 @@ def _init_spotify(cfg):
     )
 
 
+def _init_research(cfg):
+    if ResearchStorage is None:
+        return None
+    try:
+        return ResearchStorage(cfg.paths.home / "research")
+    except Exception as e:
+        print(f"[friday] research storage init failed: {e}")
+        return None
+
+
 async def record_until_silence(vad: VAD, max_s: int) -> bytes:
     buf = bytearray()
     speech_seen = False
@@ -74,15 +94,17 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
     return bytes(buf)
 
 
-def _build_session_prompt(memory: Memory) -> str:
+def _build_session_prompt(memory: Memory, research) -> str:
+    research_state = research.state_summary() if research is not None else ""
     return personality.build(
         today=datetime.now().date().isoformat(),
         memory=memory.last_7_days(),
         facts=memory.read_facts(),
+        research_state=research_state,
     )
 
 
-async def session_loop(cfg, brain, stt, vad, tts, memory, session: Session) -> None:
+async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Session) -> None:
     while session.state is State.ACTIVE:
         pcm = await record_until_silence(vad, cfg.max_recording_s)
         transcript = await stt.transcribe(pcm, cfg.sample_rate)
@@ -93,7 +115,7 @@ async def session_loop(cfg, brain, stt, vad, tts, memory, session: Session) -> N
             session.state = State.IDLE
             return
         session.turns.append({"user": transcript})
-        sys_prompt = _build_session_prompt(memory)
+        sys_prompt = _build_session_prompt(memory, research)
         session.state = State.SPEAKING
         reply, new_sid = await brain.ask(
             transcript, sys_prompt, session.sdk_session_id
@@ -137,9 +159,19 @@ async def main() -> None:
     vad = VAD()
     sp = _init_spotify(cfg)
     memory = Memory(cfg.paths.memory_dir, cfg.paths.facts)
+    research = _init_research(cfg)
 
     scheduler = AlarmScheduler(cfg.paths.alarms_json, speak=tts.speak)
     await scheduler.start()
+
+    # Research schedules (no-op if research or its scheduler module unavailable).
+    if research is not None and default_jobs_from_config is not None:
+        jobs = default_jobs_from_config(cfg)
+        register_jobs(scheduler.sched, jobs, research)
+        for job in catchup_due(research, jobs, window_h=cfg.research_catchup_window_h):
+            research.enqueue_pending_prompt(job.prompt, reason=f"catchup:{job.name}")
+            research.record_job_fired(job.name, datetime.now(), "catchup_queued")
+            print(f"[friday] catchup queued: {job.name}")
 
     tool_state.init(
         cfg=cfg,
@@ -147,6 +179,7 @@ async def main() -> None:
         spotify=sp,
         scheduler=scheduler,
         memory=memory,
+        research=research,
     )
 
     loop = asyncio.get_running_loop()
@@ -157,15 +190,31 @@ async def main() -> None:
     except NotImplementedError:
         pass
 
-    print("[friday] ready, listening for wake word")
+    print(f"[friday] ready (research={'on' if research else 'off'}), listening for wake word")
     try:
         while not stop.is_set():
-            await listen_for_wake(cfg.wake_model, cfg.wake_threshold)
-            tts.speak("Yes, boss.")
+            pending = research.pop_pending_prompt() if research is not None else None
+            if pending is None:
+                await listen_for_wake(cfg.wake_model, cfg.wake_threshold)
+                tts.speak("Yes, boss.")
+            else:
+                tts.speak(pending["prompt"])
+
             session = Session(state=State.ACTIVE)
+            if pending is not None:
+                session.turns.append({"user": pending["prompt"]})
+                sys_prompt = _build_session_prompt(memory, research)
+                reply, new_sid = await brain.ask(
+                    pending["prompt"], sys_prompt, session.sdk_session_id
+                )
+                session.sdk_session_id = new_sid
+                session.turns.append({"friday": reply})
+                if reply:
+                    tts.speak(reply)
+
             try:
                 await asyncio.wait_for(
-                    session_loop(cfg, brain, stt, vad, tts, memory, session),
+                    session_loop(cfg, brain, stt, vad, tts, memory, research, session),
                     timeout=cfg.silence_timeout_s,
                 )
             except asyncio.TimeoutError:

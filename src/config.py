@@ -45,6 +45,11 @@ class Config:
     max_recording_s: int
     sample_rate: int
     playback_gain: float
+    research_paper_fetch_allowlist: tuple
+    research_paper_fetch_max_bytes: int
+    research_paper_fetch_timeout_s: int
+    research_schedules: dict
+    research_catchup_window_h: int
 
 
 _cached: Config | None = None
@@ -97,6 +102,21 @@ def load() -> Config:
         max_recording_s=int(data.get("max_recording_s", 15)),
         sample_rate=int(data.get("sample_rate", 16000)),
         playback_gain=float(data.get("playback_gain", 1.0)),
+        research_paper_fetch_allowlist=tuple(
+            (data.get("research") or {}).get("paper_fetch_allowlist") or []
+        ),
+        research_paper_fetch_max_bytes=int(
+            (data.get("research") or {}).get("paper_fetch_max_bytes", 5_242_880)
+        ),
+        research_paper_fetch_timeout_s=int(
+            (data.get("research") or {}).get("paper_fetch_timeout_s", 30)
+        ),
+        research_schedules=dict(
+            (data.get("research") or {}).get("schedules") or {}
+        ),
+        research_catchup_window_h=int(
+            (data.get("research") or {}).get("catchup_window_h", 12)
+        ),
     )
     return _cached
 

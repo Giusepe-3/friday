@@ -18,6 +18,7 @@ class ToolState:
     spotify: Any = None
     speak: Optional[Callable[[str], None]] = None
     memory: Any = None
+    research: Any = None
 
 
 _state = ToolState()
@@ -29,12 +30,14 @@ def init(
     spotify: Any = None,
     speak: Optional[Callable[[str], None]] = None,
     memory: Any = None,
+    research: Any = None,
 ) -> None:
     _state.cfg = cfg
     _state.scheduler = scheduler
     _state.spotify = spotify
     _state.speak = speak
     _state.memory = memory
+    _state.research = research
 
 
 def get() -> ToolState:
@@ -47,3 +50,4 @@ def reset() -> None:
     _state.spotify = None
     _state.speak = None
     _state.memory = None
+    _state.research = None

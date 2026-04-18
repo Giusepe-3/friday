@@ -8,6 +8,22 @@ sample_rate: 16000
 playback_gain: 1.4    # multiplier applied to all WAV playback; clipped to int16 range
 silence_timeout_s: 300
 max_recording_s: 15
+research:
+  paper_fetch_allowlist:
+    - arxiv.org
+    - openreview.net
+    - aclanthology.org
+    - semanticscholar.org
+    - neurips.cc
+    - proceedings.mlr.press
+  paper_fetch_max_bytes: 5242880
+  paper_fetch_timeout_s: 30
+  schedules:
+    daily_standup: "09:00"
+    check_predictions: "09:05"
+    weekly_research_review: "SUN 18:00"
+  catchup_window_h: 12
+
 close_phrases:
   - "that's all friday"
   - "thats all friday"

@@ -168,3 +168,106 @@ def test_prediction_brier_score(tmp_research):
     tmp_research.resolve_prediction(resolved_ids[1], "false")
     brier = tmp_research.brier_score()
     assert abs(brier - 0.065) < 1e-9
+
+
+def test_write_standup(tmp_research):
+    path = tmp_research.write_standup(
+        yesterday="read 3 papers",
+        today="draft section 3",
+        blockers="none",
+        when=datetime(2026, 4, 18, 9, 0),
+    )
+    body = path.read_text(encoding="utf-8")
+    assert path.name == "2026-04-18.md"
+    assert "Yesterday" in body and "read 3 papers" in body
+    assert "Today" in body and "draft section 3" in body
+    assert "Blockers" in body and "none" in body
+
+
+def test_write_standup_same_day_appends(tmp_research):
+    when = datetime(2026, 4, 18, 9, 0)
+    tmp_research.write_standup("a", "b", "c", when=when)
+    tmp_research.write_standup("d", "e", "f", when=when.replace(hour=13))
+    body = (tmp_research.standups_dir / "2026-04-18.md").read_text(encoding="utf-8")
+    assert body.count("# Standup") == 1
+    assert "Mid-day" in body
+    assert "a" in body and "d" in body
+
+
+def test_write_review(tmp_research):
+    path = tmp_research.write_review(
+        body="## Threads emerging\n- foo\n",
+        when=datetime(2026, 4, 20),
+    )
+    assert path.name == "2026-04-20.md"
+    assert "Threads emerging" in path.read_text(encoding="utf-8")
+
+
+def test_write_summary_arxiv_id(tmp_research):
+    path = tmp_research.write_summary(
+        ref="arxiv:2410.12345",
+        url="https://arxiv.org/abs/2410.12345",
+        title="Verification of RSI",
+        body="...summary...",
+    )
+    assert path.name == "2410.12345.md"
+    body = path.read_text(encoding="utf-8")
+    assert "Verification of RSI" in body
+    assert "...summary..." in body
+
+
+def test_write_summary_url_hash(tmp_research):
+    path = tmp_research.write_summary(
+        ref="https://example.edu/paper.pdf",
+        url="https://example.edu/paper.pdf",
+        title="Other",
+        body="...",
+    )
+    assert len(path.stem) == 12
+
+
+def test_state_summary_empty(tmp_research):
+    out = tmp_research.state_summary()
+    assert "Open predictions: none" in out
+    assert "none yet" in out
+    assert "Recent topics: none" in out
+    assert "Paper queue: 0 queued" in out
+
+
+def test_state_summary_populated(tmp_research):
+    tmp_research.append_note("Verification", "thought")
+    tmp_research.log_prediction("claim", 70, "2026-06-01")
+    tmp_research.paper_queue_add("arxiv:2410.12345", "relevant")
+    tmp_research.write_standup("y", "t", "b", when=datetime.now())
+    out = tmp_research.state_summary()
+    assert "70%" in out
+    assert "1 queued" in out
+
+
+def test_schedule_state_record(tmp_research):
+    tmp_research.record_job_fired("daily_standup", datetime(2026, 4, 18, 9, 0), "fired")
+    data = tmp_research.read_schedule_state()
+    assert data["daily_standup"]["last_outcome"] == "fired"
+
+
+def test_pending_prompts_fifo(tmp_research):
+    tmp_research.enqueue_pending_prompt("one", reason="r1")
+    tmp_research.enqueue_pending_prompt("two", reason="r2")
+    assert tmp_research.pop_pending_prompt()["prompt"] == "one"
+    assert tmp_research.pop_pending_prompt()["prompt"] == "two"
+    assert tmp_research.pop_pending_prompt() is None
+
+
+from src.research.storage import arxiv_id_from_ref
+
+
+@pytest.mark.parametrize("ref,expected", [
+    ("arxiv:2410.12345", "2410.12345"),
+    ("arxiv/2410.12345", "2410.12345"),
+    ("https://arxiv.org/abs/2410.12345", "2410.12345"),
+    ("https://arxiv.org/pdf/2410.12345", "2410.12345"),
+    ("https://arxiv.org/abs/2410.12345v2", "2410.12345"),
+    ("Some Author, 2024, some paper", None),
+])
+def test_arxiv_id_from_ref(ref, expected):
+    assert arxiv_id_from_ref(ref) == expected

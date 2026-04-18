@@ -14,6 +14,12 @@ from typing import Any, Iterable
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+_ARXIV_RE = re.compile(r"(?:arxiv[:/]|arxiv\.org/(?:abs|pdf)/)(\d{4}\.\d{4,5})", re.IGNORECASE)
+
+
+def arxiv_id_from_ref(ref: str) -> str | None:
+    match = _ARXIV_RE.search(ref or "")
+    return match.group(1) if match else None
 
 
 def slugify(s: str) -> str:
@@ -200,3 +206,134 @@ class ResearchStorage:
         if self.predictions_path.exists():
             return json.loads(self.predictions_path.read_text(encoding="utf-8") or "[]")
         return []
+
+    def write_standup(
+        self,
+        yesterday: str,
+        today: str,
+        blockers: str,
+        when: datetime | None = None,
+    ) -> Path:
+        when = when or datetime.now()
+        path = self.standups_dir / f"{when.strftime('%Y-%m-%d')}.md"
+        existed = path.exists()
+        with path.open("a", encoding="utf-8") as f:
+            if not existed:
+                f.write(f"# Standup — {when.strftime('%Y-%m-%d')}\n\n")
+                header = "Morning"
+            else:
+                header = "Mid-day"
+            f.write(f"## {header} ({when.strftime('%H:%M')})\n\n")
+            f.write(f"### Yesterday\n{yesterday.strip()}\n\n")
+            f.write(f"### Today\n{today.strip()}\n\n")
+            f.write(f"### Blockers\n{blockers.strip()}\n\n")
+        return path
+
+    def write_review(self, body: str, when: datetime | None = None) -> Path:
+        when = when or datetime.now()
+        path = self.reviews_dir / f"{when.strftime('%Y-%m-%d')}.md"
+        _atomic_write_text(path, f"# Weekly review — {when.strftime('%Y-%m-%d')}\n\n{body}\n")
+        return path
+
+    def write_summary(
+        self,
+        ref: str,
+        url: str,
+        title: str,
+        body: str,
+        when: datetime | None = None,
+    ) -> Path:
+        when = when or datetime.now()
+        arxiv = arxiv_id_from_ref(ref)
+        if arxiv:
+            stem = arxiv
+        else:
+            stem = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+        path = self.summaries_dir / f"{stem}.md"
+        content = (
+            f"# {title}\n\n"
+            f"**Ref:** {ref}\n"
+            f"**URL:** {url}\n"
+            f"**Summarized:** {when.strftime('%Y-%m-%d')}\n\n"
+            f"{body.strip()}\n"
+        )
+        _atomic_write_text(path, content)
+        return path
+
+    def read_schedule_state(self) -> dict:
+        if self.schedule_state_path.exists():
+            return json.loads(self.schedule_state_path.read_text(encoding="utf-8") or "{}")
+        return {}
+
+    def write_schedule_state(self, data: dict) -> None:
+        _atomic_write_json(self.schedule_state_path, data)
+
+    def record_job_fired(self, job_name: str, fired_at: datetime, outcome: str) -> None:
+        data = self.read_schedule_state()
+        entry = data.get(job_name, {})
+        entry["last_fired_at"] = fired_at.strftime("%Y-%m-%dT%H:%M:%S")
+        entry["last_outcome"] = outcome
+        data[job_name] = entry
+        self.write_schedule_state(data)
+
+    def enqueue_pending_prompt(self, prompt: str, reason: str) -> None:
+        data = self.read_schedule_state()
+        queue = data.get("pending_prompts", [])
+        queue.append({
+            "prompt": prompt,
+            "reason": reason,
+            "queued_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+        data["pending_prompts"] = queue
+        self.write_schedule_state(data)
+
+    def pop_pending_prompt(self) -> dict | None:
+        data = self.read_schedule_state()
+        queue = data.get("pending_prompts", [])
+        if not queue:
+            return None
+        first = queue.pop(0)
+        data["pending_prompts"] = queue
+        self.write_schedule_state(data)
+        return first
+
+    def state_summary(self, max_tokens_hint: int = 500) -> str:
+        lines: list[str] = []
+        open_preds = sorted(self.predictions_open(), key=lambda p: p.get("resolve_by", ""))[:3]
+        if open_preds:
+            lines.append("Open predictions (top 3 by nearest resolve_by):")
+            for p in open_preds:
+                lines.append(f"  - {p['id']} ({p['confidence']}%): {p['claim']} — resolves {p['resolve_by']}")
+        else:
+            lines.append("Open predictions: none")
+
+        latest_standup = None
+        for md in sorted(self.standups_dir.glob("*.md"), reverse=True):
+            latest_standup = md
+            break
+        if latest_standup is not None:
+            head = latest_standup.read_text(encoding="utf-8")[:800]
+            lines.append(f"\nLast standup: {latest_standup.stem}")
+            lines.append(head.strip())
+        else:
+            lines.append("\nLast standup: none yet")
+
+        topics = self.list_topics()[:5]
+        if topics:
+            lines.append("\nRecent topics (last 7 days):")
+            for t in topics:
+                lines.append(f"  - {t['slug']} ({t.get('note_count', '?')} entries, last {t.get('last_updated', '?')})")
+        else:
+            lines.append("\nRecent topics: none")
+
+        queue = self._read_paper_queue()
+        statuses = {"queued": 0, "summarized": 0, "dropped": 0}
+        for p in queue:
+            statuses[p.get("status", "queued")] = statuses.get(p.get("status", "queued"), 0) + 1
+        lines.append(f"\nPaper queue: {statuses['queued']} queued, {statuses['summarized']} summarised, {statuses['dropped']} dropped")
+
+        out = "\n".join(lines)
+        max_chars = max_tokens_hint * 4
+        if len(out) > max_chars:
+            out = out[:max_chars].rsplit("\n", 1)[0] + "\n... (truncated)"
+        return out

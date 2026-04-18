@@ -19,3 +19,16 @@ def test_whitespace_only_defaults():
     prompt = personality.build(today="2026-04-18", memory="   \n", facts="\t")
     assert "(no recent memory)" in prompt
     assert "(no standing facts)" in prompt
+
+
+def test_research_state_filled():
+    prompt = personality.build(
+        today="2026-04-18", memory="m", facts="f",
+        research_state="Open predictions: 3 open",
+    )
+    assert "3 open" in prompt
+
+
+def test_research_state_default():
+    prompt = personality.build(today="2026-04-18", memory="", facts="")
+    assert "(no research state)" in prompt

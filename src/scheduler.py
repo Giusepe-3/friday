@@ -75,7 +75,9 @@ class AlarmScheduler:
 
     def _persist(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(
             json.dumps(list(self.alarms.values()), indent=2),
             encoding="utf-8",
         )
+        tmp.replace(self.path)
