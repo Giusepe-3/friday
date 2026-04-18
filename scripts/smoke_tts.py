@@ -17,6 +17,7 @@ def main() -> None:
         voice_reference=cfg.voice_reference,
         voice_speaker=cfg.voice_speaker,
         language=cfg.voice_language,
+        playback_gain=cfg.playback_gain,
     )
     tts.speak("Hello, boss. Voice cloning is online.")
 

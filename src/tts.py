@@ -38,10 +38,12 @@ class TTS:
         voice_reference: Optional[Path] = None,
         voice_speaker: str = "Claribel Dervla",
         language: str = "en",
+        playback_gain: float = 1.0,
     ) -> None:
         self.voice_reference = voice_reference if voice_reference and voice_reference.exists() else None
         self.voice_speaker = voice_speaker
         self.language = language
+        self.playback_gain = playback_gain
         self._gpu = torch.cuda.is_available()
         self._engine = CoquiTTS(model_name=XTTS_MODEL, gpu=self._gpu)
 
@@ -61,6 +63,6 @@ class TTS:
             else:
                 kwargs["speaker"] = self.voice_speaker
             self._engine.tts_to_file(**kwargs)
-            audio.play_wav(out)
+            audio.play_wav(out, gain=self.playback_gain)
         finally:
             out.unlink(missing_ok=True)

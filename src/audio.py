@@ -49,8 +49,11 @@ async def mic_stream(frame_samples: int) -> AsyncIterator[bytes]:
         stream.close()
 
 
-def play_wav(path: Path) -> None:
-    """Play a WAV file through the default output device. Blocks until done."""
+def play_wav(path: Path, gain: float = 1.0) -> None:
+    """Play a WAV file through the default output device. Blocks until done.
+
+    ``gain`` multiplies samples before playback. Values >1.0 amplify; we clip
+    to the dtype range to avoid overflow wrap-around."""
     with wave.open(str(path), "rb") as w:
         rate = w.getframerate()
         channels = w.getnchannels()
@@ -61,6 +64,10 @@ def play_wav(path: Path) -> None:
     arr = np.frombuffer(frames, dtype=dtype)
     if channels > 1:
         arr = arr.reshape(-1, channels)
+
+    if gain != 1.0:
+        info = np.iinfo(dtype)
+        arr = np.clip(arr.astype(np.float32) * gain, info.min, info.max).astype(dtype)
 
     sd.play(arr, rate)
     sd.wait()

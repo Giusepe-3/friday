@@ -44,6 +44,7 @@ class Config:
     silence_timeout_s: int
     max_recording_s: int
     sample_rate: int
+    playback_gain: float
 
 
 _cached: Config | None = None
@@ -95,6 +96,7 @@ def load() -> Config:
         silence_timeout_s=int(data.get("silence_timeout_s", 300)),
         max_recording_s=int(data.get("max_recording_s", 15)),
         sample_rate=int(data.get("sample_rate", 16000)),
+        playback_gain=float(data.get("playback_gain", 1.0)),
     )
     return _cached
 

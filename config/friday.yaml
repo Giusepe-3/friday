@@ -5,6 +5,7 @@ wake_threshold: 0.5
 voice_speaker: Claribel Dervla          # XTTS v2 built-in, Irish-lilt female
 voice_language: en
 sample_rate: 16000
+playback_gain: 1.4    # multiplier applied to all WAV playback; clipped to int16 range
 silence_timeout_s: 300
 max_recording_s: 15
 close_phrases:
