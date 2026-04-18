@@ -187,6 +187,7 @@ async def main() -> None:
         voice_speaker=cfg.voice_speaker,
         language=cfg.voice_language,
         playback_gain=cfg.playback_gain,
+        playback_speed=cfg.playback_speed,
     )
     brain = Brain(model=cfg.claude_model)
     stt = STT(cfg.groq_api_key)

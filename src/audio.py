@@ -49,11 +49,12 @@ async def mic_stream(frame_samples: int) -> AsyncIterator[bytes]:
         stream.close()
 
 
-def play_wav(path: Path, gain: float = 1.0) -> None:
+def play_wav(path: Path, gain: float = 1.0, speed: float = 1.0) -> None:
     """Play a WAV file through the default output device. Blocks until done.
 
-    ``gain`` multiplies samples before playback. Values >1.0 amplify; we clip
-    to the dtype range to avoid overflow wrap-around."""
+    ``gain`` multiplies samples (clipped to int16 range).
+    ``speed`` time-stretches via librosa phase vocoder — preserves pitch.
+    speed=1.3 plays 30% faster at the same pitch."""
     with wave.open(str(path), "rb") as w:
         rate = w.getframerate()
         channels = w.getnchannels()
@@ -64,6 +65,15 @@ def play_wav(path: Path, gain: float = 1.0) -> None:
     arr = np.frombuffer(frames, dtype=dtype)
     if channels > 1:
         arr = arr.reshape(-1, channels)
+
+    if speed != 1.0:
+        import librosa
+        info = np.iinfo(dtype)
+        mono = arr.astype(np.float32) / info.max
+        if mono.ndim == 2:
+            mono = mono.mean(axis=1)
+        stretched = librosa.effects.time_stretch(mono, rate=speed)
+        arr = np.clip(stretched * info.max, info.min, info.max).astype(dtype)
 
     if gain != 1.0:
         info = np.iinfo(dtype)

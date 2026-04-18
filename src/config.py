@@ -46,6 +46,7 @@ class Config:
     max_recording_s: int
     sample_rate: int
     playback_gain: float
+    playback_speed: float
     research_paper_fetch_allowlist: tuple
     research_paper_fetch_max_bytes: int
     research_paper_fetch_timeout_s: int
@@ -104,6 +105,7 @@ def load() -> Config:
         max_recording_s=int(data.get("max_recording_s", 15)),
         sample_rate=int(data.get("sample_rate", 16000)),
         playback_gain=float(data.get("playback_gain", 1.0)),
+        playback_speed=float(data.get("playback_speed", 1.0)),
         research_paper_fetch_allowlist=tuple(
             (data.get("research") or {}).get("paper_fetch_allowlist") or []
         ),

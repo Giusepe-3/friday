@@ -7,6 +7,7 @@ voice_speaker: Claribel Dervla          # XTTS v2 built-in, Irish-lilt female
 voice_language: en
 sample_rate: 16000
 playback_gain: 1.4    # multiplier applied to all WAV playback; clipped to int16 range
+playback_speed: 1.3   # time-stretch factor (1.0 = natural, 1.3 = 30% faster, pitch preserved)
 silence_timeout_s: 60
 max_recording_s: 15
 research:
