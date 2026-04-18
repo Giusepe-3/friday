@@ -44,8 +44,8 @@ class TTS:
         self.voice_speaker = voice_speaker
         self.language = language
         self.playback_gain = playback_gain
-        self._gpu = torch.cuda.is_available()
-        self._engine = CoquiTTS(model_name=XTTS_MODEL, gpu=self._gpu)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._engine = CoquiTTS(model_name=XTTS_MODEL).to(device)
 
     def speak(self, text: str) -> None:
         if not text.strip():
