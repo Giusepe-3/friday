@@ -108,6 +108,24 @@ def _build_session_prompt(memory: Memory, research) -> str:
     )
 
 
+_HALLUCINATION_SHORT = {
+    "thank you", "thank you.", "thanks", "thanks.", "bye", "bye.",
+    "you", "you.", "thanks for watching", "thanks for watching.",
+    "okay", "okay.", "ok", "ok.", ".", "",
+}
+
+
+def _looks_like_hallucination(t: str) -> bool:
+    norm = t.strip().lower()
+    if norm in _HALLUCINATION_SHORT:
+        return True
+    # 1-2 word utterances that are common boilerplate
+    words = [w for w in norm.replace(".", "").split() if w]
+    if len(words) <= 2 and norm.rstrip(".") in {"thank you", "bye", "thanks", "you"}:
+        return True
+    return False
+
+
 async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Session) -> None:
     while session.state is State.ACTIVE:
         print("[session] listening (VAD-bounded)…", flush=True)
@@ -120,6 +138,9 @@ async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Ses
         print(f"[session] transcript: {transcript!r}", flush=True)
         if not transcript.strip():
             print("[session] empty transcript, continuing", flush=True)
+            continue
+        if _looks_like_hallucination(transcript):
+            print("[session] filtered hallucination, continuing", flush=True)
             continue
         if is_close_phrase(transcript, cfg.close_phrases):
             print("[session] close phrase detected", flush=True)
