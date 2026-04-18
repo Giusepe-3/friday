@@ -1,7 +1,7 @@
-"""FRIDAY entrypoint — Phase 3 single-turn loop.
+"""FRIDAY entrypoint — Phase 3.5 session loop.
 
-Flow: wait for wake word → record until silence → STT → brain → TTS → loop.
-One turn per wake. Phase 3.5 will replace this with an active-session loop."""
+Flow: wake → say "Yes, boss." → enter ACTIVE session → loop (record → STT →
+close phrase? ack+exit : brain → TTS) → on close or timeout, re-arm wake."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from src import audio
 from src import config as cfg_mod
 from src import personality
 from src.brain import Brain
+from src.session import Session, State, is_close_phrase
 from src.stt import STT
 from src.tts import TTS
 from src.vad import VAD
@@ -41,6 +42,40 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
     return bytes(buf)
 
 
+async def session_loop(
+    cfg,
+    brain: Brain,
+    stt: STT,
+    vad: VAD,
+    tts: TTS,
+    session: Session,
+) -> None:
+    while session.state is State.ACTIVE:
+        pcm = await record_until_silence(vad, cfg.max_recording_s)
+        transcript = await stt.transcribe(pcm, cfg.sample_rate)
+        if not transcript.strip():
+            continue
+        if is_close_phrase(transcript, cfg.close_phrases):
+            tts.speak("Done, boss.")
+            session.state = State.IDLE
+            return
+        session.turns.append({"user": transcript})
+        sys_prompt = personality.build(
+            today=datetime.now().date().isoformat(),
+            memory="",
+            facts="",
+        )
+        session.state = State.SPEAKING
+        reply, new_sid = await brain.ask(
+            transcript, sys_prompt, session.sdk_session_id
+        )
+        session.sdk_session_id = new_sid
+        session.turns.append({"friday": reply})
+        if reply:
+            tts.speak(reply)
+        session.state = State.ACTIVE
+
+
 async def main() -> None:
     cfg = cfg_mod.load()
     tts = TTS(cfg.piper_exe, cfg.piper_voice)
@@ -61,18 +96,15 @@ async def main() -> None:
     while not stop.is_set():
         await listen_for_wake(cfg.wake_model, cfg.wake_threshold)
         tts.speak("Yes, boss.")
-        pcm = await record_until_silence(vad, cfg.max_recording_s)
-        transcript = await stt.transcribe(pcm, cfg.sample_rate)
-        if not transcript.strip():
-            continue
-        sys_prompt = personality.build(
-            today=datetime.now().date().isoformat(),
-            memory="",
-            facts="",
-        )
-        reply, _ = await brain.ask(transcript, sys_prompt, None)
-        if reply:
-            tts.speak(reply)
+        session = Session(state=State.ACTIVE)
+        try:
+            await asyncio.wait_for(
+                session_loop(cfg, brain, stt, vad, tts, session),
+                timeout=cfg.silence_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            tts.speak("Closing out, boss.")
+            session.state = State.IDLE
 
 
 if __name__ == "__main__":
