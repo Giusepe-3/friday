@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Secrets
+config/.env
+
+# Binary assets (licensed / large)
+voices/*.ppn
+voices/*.onnx
+voices/*.onnx.json
+piper/
+
+# Runtime state (user home, not repo — but belt and braces)
+friday_home/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
