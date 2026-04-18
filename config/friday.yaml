@@ -1,5 +1,5 @@
 claude_model: claude-sonnet-4-6
-shim_model: haiku                       # voice shim default — fast replies; Sonnet still used for text mode
+shim_model: sonnet                      # voice shim model — Sonnet 4.6 (quality) over Haiku (speed)
 wake_model: hey_jarvis
 wake_threshold: 0.5
 # voice_reference: voices/kerry.wav   # uncomment once you drop a Kerry clip
