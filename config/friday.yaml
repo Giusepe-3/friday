@@ -1,5 +1,6 @@
 claude_model: claude-sonnet-4-6
-porcupine_keyword_path: voices/friday.ppn
+wake_model: hey_jarvis
+wake_threshold: 0.5
 piper_exe: piper/piper.exe
 piper_voice: voices/en_GB-alan-medium.onnx
 sample_rate: 16000
