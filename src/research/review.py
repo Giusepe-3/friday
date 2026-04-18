@@ -76,7 +76,7 @@ async def generate_weekly_review(storage, brain) -> tuple[str, Path]:
     """Return (body, path). `brain` is a Brain instance. Writes file; returns path."""
     inputs = _collect_inputs(storage)
     user_text = f"INPUTS:\n\n{inputs}"
-    reply, _ = await brain.ask(user_text, _REVIEW_PROMPT, session_id=None)
+    reply = await brain.ask_oneshot(user_text, _REVIEW_PROMPT)
     inventory = _input_inventory(storage)
     full_body = f"{reply}\n\n## Raw inputs reviewed\n{inventory}\n"
     path = storage.write_review(full_body)

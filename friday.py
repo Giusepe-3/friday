@@ -148,14 +148,10 @@ async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Ses
             session.state = State.IDLE
             return
         session.turns.append({"user": transcript})
-        sys_prompt = _build_session_prompt(memory, research)
         session.state = State.SPEAKING
         print("[session] brain.ask…", flush=True)
-        reply, new_sid = await brain.ask(
-            transcript, sys_prompt, session.sdk_session_id
-        )
+        reply = await brain.ask(transcript)
         print(f"[session] brain reply: {reply[:80]!r}...", flush=True)
-        session.sdk_session_id = new_sid
         session.turns.append({"friday": reply})
         if reply:
             tts.speak(reply)
@@ -173,7 +169,7 @@ async def summarise_session(brain: Brain, memory: Memory, session: Session) -> N
             transcript_lines.append(f"FRIDAY: {turn['friday']}")
     transcript = "\n".join(transcript_lines)
     try:
-        summary, _ = await brain.ask(transcript, SUMMARY_PROMPT, None)
+        summary = await brain.ask_oneshot(transcript, SUMMARY_PROMPT)
     except Exception as e:
         print(f"[memory] summary failed: {e}")
         return
@@ -238,26 +234,29 @@ async def main() -> None:
                 print(f"[friday] draining pending prompt: {pending['reason']}", flush=True)
                 tts.speak(pending["prompt"])
 
+            sys_prompt = _build_session_prompt(memory, research)
+            await brain.start_session(sys_prompt)
             session = Session(state=State.ACTIVE)
-            if pending is not None:
-                session.turns.append({"user": pending["prompt"]})
-                sys_prompt = _build_session_prompt(memory, research)
-                reply, new_sid = await brain.ask(
-                    pending["prompt"], sys_prompt, session.sdk_session_id
-                )
-                session.sdk_session_id = new_sid
-                session.turns.append({"friday": reply})
-                if reply:
-                    tts.speak(reply)
 
             try:
-                await asyncio.wait_for(
-                    session_loop(cfg, brain, stt, vad, tts, memory, research, session),
-                    timeout=cfg.silence_timeout_s,
-                )
-            except asyncio.TimeoutError:
-                tts.speak("Closing out, boss.")
-                session.state = State.IDLE
+                if pending is not None:
+                    session.turns.append({"user": pending["prompt"]})
+                    reply = await brain.ask(pending["prompt"])
+                    session.turns.append({"friday": reply})
+                    if reply:
+                        tts.speak(reply)
+
+                try:
+                    await asyncio.wait_for(
+                        session_loop(cfg, brain, stt, vad, tts, memory, research, session),
+                        timeout=cfg.silence_timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    tts.speak("Closing out, boss.")
+                    session.state = State.IDLE
+            finally:
+                await brain.end_session()
+
             await summarise_session(brain, memory, session)
     finally:
         scheduler.sched.shutdown(wait=False)

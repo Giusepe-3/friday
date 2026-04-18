@@ -17,9 +17,8 @@ async def test_generate_weekly_review(tmp_path):
     s.resolve_prediction(pid, "true")
 
     brain = AsyncMock()
-    brain.ask.return_value = (
-        "## Threads emerging\n- x\n\n## Gaps\n- y\n\n## Suggested focus next week\n- z\n",
-        None,
+    brain.ask_oneshot.return_value = (
+        "## Threads emerging\n- x\n\n## Gaps\n- y\n\n## Suggested focus next week\n- z\n"
     )
 
     body, path = await generate_weekly_review(s, brain)
@@ -27,4 +26,4 @@ async def test_generate_weekly_review(tmp_path):
     full = path.read_text(encoding="utf-8")
     assert "Threads emerging" in full
     assert "Raw inputs reviewed" in full
-    brain.ask.assert_called_once()
+    brain.ask_oneshot.assert_called_once()
