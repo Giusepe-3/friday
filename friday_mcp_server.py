@@ -42,24 +42,38 @@ def _sp():
     _init()
     if not (_cfg.spotify_client_id and _cfg.spotify_client_secret):
         return None
-    return spotipy.Spotify(
-        auth_manager=SpotifyOAuth(
-            client_id=_cfg.spotify_client_id,
-            client_secret=_cfg.spotify_client_secret,
-            redirect_uri=_cfg.spotify_redirect_uri,
-            scope="user-modify-playback-state user-read-playback-state",
-            cache_path=str(_cfg.paths.home / ".spotipy_cache"),
-            open_browser=False,
-        )
+    cache_path = _cfg.paths.home / ".spotipy_cache"
+    if not cache_path.exists():
+        # No cached token; MCP server must not start an interactive OAuth
+        # flow (would hang waiting for browser callback). Bail fast.
+        return None
+    auth = SpotifyOAuth(
+        client_id=_cfg.spotify_client_id,
+        client_secret=_cfg.spotify_client_secret,
+        redirect_uri=_cfg.spotify_redirect_uri,
+        scope="user-modify-playback-state user-read-playback-state",
+        cache_path=str(cache_path),
+        open_browser=False,
     )
+    # Refresh token if expired, but never trigger interactive flow.
+    if auth.get_cached_token() is None:
+        return None
+    return spotipy.Spotify(auth_manager=auth)
+
+
+def _sp_or_err():
+    sp = _sp()
+    if sp is None:
+        return None, "spotify not configured or OAuth cache missing — run friday.py once interactively to bootstrap"
+    return sp, None
 
 
 @mcp.tool()
 def play_spotify(query: str) -> str:
     """Search Spotify and start playback of the top result on the active device."""
-    sp = _sp()
-    if sp is None:
-        return "spotify not configured"
+    sp, err = _sp_or_err()
+    if err:
+        return err
     results = sp.search(q=query, type="track", limit=1)
     items = results.get("tracks", {}).get("items", [])
     if not items:
@@ -73,9 +87,9 @@ def play_spotify(query: str) -> str:
 @mcp.tool()
 def pause_spotify() -> str:
     """Pause Spotify playback."""
-    sp = _sp()
-    if sp is None:
-        return "spotify not configured"
+    sp, err = _sp_or_err()
+    if err:
+        return err
     sp.pause_playback()
     return "paused"
 
@@ -83,9 +97,9 @@ def pause_spotify() -> str:
 @mcp.tool()
 def resume_spotify() -> str:
     """Resume Spotify playback."""
-    sp = _sp()
-    if sp is None:
-        return "spotify not configured"
+    sp, err = _sp_or_err()
+    if err:
+        return err
     sp.start_playback()
     return "resumed"
 
@@ -93,9 +107,9 @@ def resume_spotify() -> str:
 @mcp.tool()
 def skip_track() -> str:
     """Skip to the next track on Spotify."""
-    sp = _sp()
-    if sp is None:
-        return "spotify not configured"
+    sp, err = _sp_or_err()
+    if err:
+        return err
     sp.next_track()
     return "skipped"
 
@@ -103,9 +117,9 @@ def skip_track() -> str:
 @mcp.tool()
 def set_volume(level: int) -> str:
     """Set Spotify client volume 0-100."""
-    sp = _sp()
-    if sp is None:
-        return "spotify not configured"
+    sp, err = _sp_or_err()
+    if err:
+        return err
     level = max(0, min(100, int(level)))
     sp.volume(level)
     return f"volume {level}"
