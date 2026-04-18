@@ -17,7 +17,7 @@ from src.memory import Memory
 from src.scheduler import AlarmScheduler
 from src.session import Session, State, is_close_phrase
 from src.stt import STT
-from src.tts import TTS
+from src.tts import TTS, speak_streaming
 from src.vad import VAD
 from src.wake import listen_for_wake
 from src.tools import state as tool_state
@@ -149,12 +149,10 @@ async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Ses
             return
         session.turns.append({"user": transcript})
         session.state = State.SPEAKING
-        print("[session] brain.ask…", flush=True)
-        reply = await brain.ask(transcript)
+        print("[session] brain.ask_streaming…", flush=True)
+        reply = await speak_streaming(tts, brain.ask_streaming(transcript))
         print(f"[session] brain reply: {reply[:80]!r}...", flush=True)
         session.turns.append({"friday": reply})
-        if reply:
-            tts.speak(reply)
         session.state = State.ACTIVE
 
 
@@ -241,10 +239,8 @@ async def main() -> None:
             try:
                 if pending is not None:
                     session.turns.append({"user": pending["prompt"]})
-                    reply = await brain.ask(pending["prompt"])
+                    reply = await speak_streaming(tts, brain.ask_streaming(pending["prompt"]))
                     session.turns.append({"friday": reply})
-                    if reply:
-                        tts.speak(reply)
 
                 try:
                     await asyncio.wait_for(

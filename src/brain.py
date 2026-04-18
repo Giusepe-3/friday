@@ -11,15 +11,37 @@ from __future__ import annotations
 
 from typing import Optional
 
+import re
+from typing import AsyncIterator
+
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     query,
 )
 
 from .tools import ALLOWED_TOOL_NAMES, build_server
+
+
+_SENT_END = re.compile(r"[.!?][\s\n]")
+
+
+def _yield_sentences(buffer: str) -> tuple[list[str], str]:
+    """Split buffer into (complete_sentences, remaining). Sentence = `.!?` + whitespace."""
+    out = []
+    while True:
+        m = _SENT_END.search(buffer)
+        if m is None:
+            break
+        cut = m.end()
+        sentence = buffer[:cut].strip()
+        if sentence:
+            out.append(sentence)
+        buffer = buffer[cut:]
+    return out, buffer
 
 
 class Brain:
@@ -36,6 +58,7 @@ class Brain:
             allowed_tools=ALLOWED_TOOL_NAMES,
             setting_sources=[],
             permission_mode="bypassPermissions",
+            include_partial_messages=True,
         )
 
     async def start_session(self, system_prompt: str) -> None:
@@ -54,6 +77,32 @@ class Brain:
             if isinstance(msg, ResultMessage):
                 final = getattr(msg, "result", "") or final
         return final
+
+    async def ask_streaming(self, user_text: str) -> AsyncIterator[str]:
+        """Yield sentence chunks as Claude generates them via streaming.
+
+        Requires ``include_partial_messages=True`` in options. Consumers
+        typically pair this with a TTS sink running on a thread so speech
+        playback overlaps further token generation."""
+        if self._client is None:
+            raise RuntimeError("brain.ask_streaming called before start_session")
+        await self._client.query(user_text)
+        buffer = ""
+        async for msg in self._client.receive_response():
+            if isinstance(msg, StreamEvent):
+                evt = msg.event or {}
+                if evt.get("type") == "content_block_delta":
+                    delta = evt.get("delta", {}) or {}
+                    if delta.get("type") == "text_delta":
+                        buffer += delta.get("text", "")
+                        sentences, buffer = _yield_sentences(buffer)
+                        for s in sentences:
+                            yield s
+            elif isinstance(msg, ResultMessage):
+                pass
+        tail = buffer.strip()
+        if tail:
+            yield tail
 
     async def end_session(self) -> None:
         if self._client is not None:

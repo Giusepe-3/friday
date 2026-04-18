@@ -21,13 +21,15 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
+    StreamEvent,
 )
 
 from src import audio
 from src import config as cfg_mod
+from src.brain import _yield_sentences
 from src.session import State, is_close_phrase
 from src.stt import STT
-from src.tts import TTS
+from src.tts import TTS, speak_streaming
 from src.vad import VAD
 from src.wake import listen_for_wake
 
@@ -91,6 +93,7 @@ class ShimBrain:
             model=self._model,
             cwd=self._cwd,
             permission_mode="bypassPermissions",
+            include_partial_messages=True,
         )
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
@@ -104,6 +107,28 @@ class ShimBrain:
             if isinstance(msg, ResultMessage):
                 final = getattr(msg, "result", "") or final
         return final
+
+    async def ask_streaming(self, user_text: str):
+        """Yield sentence chunks as Claude generates them."""
+        if self._client is None:
+            raise RuntimeError("ShimBrain.ask_streaming called before start()")
+        await self._client.query(user_text)
+        buffer = ""
+        async for msg in self._client.receive_response():
+            if isinstance(msg, StreamEvent):
+                evt = msg.event or {}
+                if evt.get("type") == "content_block_delta":
+                    delta = evt.get("delta", {}) or {}
+                    if delta.get("type") == "text_delta":
+                        buffer += delta.get("text", "")
+                        sentences, buffer = _yield_sentences(buffer)
+                        for s in sentences:
+                            yield s
+            elif isinstance(msg, ResultMessage):
+                pass
+        tail = buffer.strip()
+        if tail:
+            yield tail
 
     async def stop(self) -> None:
         if self._client is not None:
@@ -172,11 +197,9 @@ async def main() -> None:
                     break
 
                 t0 = datetime.now()
-                reply = await brain.ask(transcript)
+                reply = await speak_streaming(tts, brain.ask_streaming(transcript))
                 dt = (datetime.now() - t0).total_seconds()
-                print(f"[shim] reply ({dt:.1f}s): {reply[:80]!r}…", flush=True)
-                if reply:
-                    tts.speak(reply)
+                print(f"[shim] reply ({dt:.1f}s end-to-end): {reply[:80]!r}…", flush=True)
         finally:
             await brain.stop()
 

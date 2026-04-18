@@ -15,10 +15,11 @@ inference well under a second per sentence."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 # Auto-accept the Coqui public model license (CPML) so first-run is
 # non-interactive. Personal/non-commercial use is permitted.
@@ -66,3 +67,34 @@ class TTS:
             audio.play_wav(out, gain=self.playback_gain)
         finally:
             out.unlink(missing_ok=True)
+
+
+async def speak_streaming(tts: "TTS", sentence_iter: AsyncIterator[str]) -> str:
+    """Consume an async iterator of sentences, speaking each through ``tts``.
+
+    Producer (brain) and consumer (TTS) run concurrently — the first
+    sentence hits the speaker while later sentences are still being
+    generated. Returns the accumulated full text.
+
+    ``tts.speak`` is blocking; we bridge through ``asyncio.to_thread`` so
+    the producer keeps emitting tokens while playback happens on a worker."""
+    queue: asyncio.Queue = asyncio.Queue()
+    collected: list[str] = []
+
+    async def producer() -> None:
+        try:
+            async for sentence in sentence_iter:
+                collected.append(sentence)
+                await queue.put(sentence)
+        finally:
+            await queue.put(None)
+
+    async def consumer() -> None:
+        while True:
+            s = await queue.get()
+            if s is None:
+                break
+            await asyncio.to_thread(tts.speak, s)
+
+    await asyncio.gather(producer(), consumer())
+    return " ".join(collected)
