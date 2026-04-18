@@ -74,6 +74,10 @@ def _init_research(cfg):
 
 
 async def record_until_silence(vad: VAD, max_s: int) -> bytes:
+    """Return captured PCM, or b'' if VAD never detected real speech.
+
+    Empty return suppresses downstream STT calls that would otherwise
+    hallucinate ("Thank you." / "Bye." / etc.) on silent buffers."""
     buf = bytearray()
     speech_seen = False
     silent = 0
@@ -91,7 +95,7 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
                 break
         if frames >= max_frames:
             break
-    return bytes(buf)
+    return bytes(buf) if speech_seen else b""
 
 
 def _build_session_prompt(memory: Memory, research) -> str:
@@ -106,20 +110,30 @@ def _build_session_prompt(memory: Memory, research) -> str:
 
 async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Session) -> None:
     while session.state is State.ACTIVE:
+        print("[session] listening (VAD-bounded)…", flush=True)
         pcm = await record_until_silence(vad, cfg.max_recording_s)
+        if not pcm:
+            print("[session] no speech detected, skipping", flush=True)
+            continue
+        print(f"[session] got {len(pcm)} bytes of pcm, transcribing…", flush=True)
         transcript = await stt.transcribe(pcm, cfg.sample_rate)
+        print(f"[session] transcript: {transcript!r}", flush=True)
         if not transcript.strip():
+            print("[session] empty transcript, continuing", flush=True)
             continue
         if is_close_phrase(transcript, cfg.close_phrases):
+            print("[session] close phrase detected", flush=True)
             tts.speak("Done, boss.")
             session.state = State.IDLE
             return
         session.turns.append({"user": transcript})
         sys_prompt = _build_session_prompt(memory, research)
         session.state = State.SPEAKING
+        print("[session] brain.ask…", flush=True)
         reply, new_sid = await brain.ask(
             transcript, sys_prompt, session.sdk_session_id
         )
+        print(f"[session] brain reply: {reply[:80]!r}...", flush=True)
         session.sdk_session_id = new_sid
         session.turns.append({"friday": reply})
         if reply:
@@ -195,9 +209,12 @@ async def main() -> None:
         while not stop.is_set():
             pending = research.pop_pending_prompt() if research is not None else None
             if pending is None:
+                print(f"[friday] awaiting wake word '{cfg.wake_model}' (threshold {cfg.wake_threshold})", flush=True)
                 await listen_for_wake(cfg.wake_model, cfg.wake_threshold)
+                print("[friday] wake fired — entering session", flush=True)
                 tts.speak("Yes, boss.")
             else:
+                print(f"[friday] draining pending prompt: {pending['reason']}", flush=True)
                 tts.speak(pending["prompt"])
 
             session = Session(state=State.ACTIVE)
@@ -226,7 +243,11 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    import traceback
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        print("[friday] interrupted by user", flush=True)
+    except Exception as e:
+        print(f"[friday] FATAL: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
