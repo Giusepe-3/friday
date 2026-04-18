@@ -1,0 +1,17 @@
+claude_model: claude-sonnet-4-6
+porcupine_keyword_path: voices/friday.ppn
+piper_exe: piper/piper.exe
+piper_voice: voices/en_GB-alan-medium.onnx
+sample_rate: 16000
+silence_timeout_s: 300
+max_recording_s: 15
+close_phrases:
+  - "that's all friday"
+  - "thats all friday"
+  - "thanks friday"
+  - "thank you friday"
+  - "fine friday"
+  - "goodbye friday"
+  - "bye friday"
+  - "we're done friday"
+  - "were done friday"
