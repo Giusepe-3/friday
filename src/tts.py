@@ -69,7 +69,11 @@ class TTS:
             out.unlink(missing_ok=True)
 
 
-async def speak_streaming(tts: "TTS", sentence_iter: AsyncIterator[str]) -> str:
+async def speak_streaming(
+    tts: "TTS",
+    sentence_iter: AsyncIterator[str],
+    echo: bool = True,
+) -> str:
     """Consume an async iterator of sentences, speaking each through ``tts``.
 
     Producer (brain) and consumer (TTS) run concurrently — the first
@@ -77,7 +81,10 @@ async def speak_streaming(tts: "TTS", sentence_iter: AsyncIterator[str]) -> str:
     generated. Returns the accumulated full text.
 
     ``tts.speak`` is blocking; we bridge through ``asyncio.to_thread`` so
-    the producer keeps emitting tokens while playback happens on a worker."""
+    the producer keeps emitting tokens while playback happens on a worker.
+
+    When ``echo`` is True (default), each sentence is printed to stdout as
+    it arrives so you can watch the full reply in the terminal."""
     queue: asyncio.Queue = asyncio.Queue()
     collected: list[str] = []
 
@@ -85,6 +92,8 @@ async def speak_streaming(tts: "TTS", sentence_iter: AsyncIterator[str]) -> str:
         try:
             async for sentence in sentence_iter:
                 collected.append(sentence)
+                if echo:
+                    print(f"[reply] {sentence}", flush=True)
                 await queue.put(sentence)
         finally:
             await queue.put(None)

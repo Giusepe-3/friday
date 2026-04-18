@@ -151,7 +151,7 @@ async def session_loop(cfg, brain, stt, vad, tts, memory, research, session: Ses
         session.state = State.SPEAKING
         print("[session] brain.ask_streaming…", flush=True)
         reply = await speak_streaming(tts, brain.ask_streaming(transcript))
-        print(f"[session] brain reply: {reply[:80]!r}...", flush=True)
+        print(f"[session] full reply: {reply}", flush=True)
         session.turns.append({"friday": reply})
         session.state = State.ACTIVE
 

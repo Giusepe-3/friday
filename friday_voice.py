@@ -199,7 +199,7 @@ async def main() -> None:
                 t0 = datetime.now()
                 reply = await speak_streaming(tts, brain.ask_streaming(transcript))
                 dt = (datetime.now() - t0).total_seconds()
-                print(f"[shim] reply ({dt:.1f}s end-to-end): {reply[:80]!r}…", flush=True)
+                print(f"[shim] full reply ({dt:.1f}s): {reply}", flush=True)
         finally:
             await brain.stop()
 
