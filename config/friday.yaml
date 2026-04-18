@@ -1,8 +1,9 @@
 claude_model: claude-sonnet-4-6
 wake_model: hey_jarvis
 wake_threshold: 0.5
-piper_exe: piper/piper.exe
-piper_voice: voices/en_GB-alan-medium.onnx
+# voice_reference: voices/kerry.wav   # uncomment once you drop a Kerry clip
+voice_speaker: Claribel Dervla          # XTTS v2 built-in, Irish-lilt female
+voice_language: en
 sample_rate: 16000
 silence_timeout_s: 300
 max_recording_s: 15

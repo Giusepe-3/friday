@@ -1,21 +1,49 @@
-"""Text-to-speech via the Piper binary.
+"""Text-to-speech via Coqui XTTS v2 (voice cloning).
 
-Pipes text to ``piper.exe`` which writes a WAV. We then play the WAV through
-``audio.play_wav``. Temporary files are cleaned up in ``finally``."""
+Loads the XTTS v2 model once at startup and keeps it in memory. On
+``speak()`` we synth a WAV to a temp file, then play through ``audio.play_wav``.
+
+Two ways to pick the speaker:
+
+* ``voice_reference`` — path to a 6–10 s reference WAV for voice cloning
+  (e.g. a Kerry Condon clip). Takes precedence when present.
+* ``voice_speaker`` — name of an XTTS v2 built-in speaker (e.g.
+  ``"Claribel Dervla"`` for Irish-lilt female). Used when no reference is set.
+
+GPU is used automatically when available; CUDA on the 3070Ti makes
+inference well under a second per sentence."""
 
 from __future__ import annotations
 
-import subprocess
+import os
 import tempfile
 from pathlib import Path
+from typing import Optional
+
+# Auto-accept the Coqui public model license (CPML) so first-run is
+# non-interactive. Personal/non-commercial use is permitted.
+os.environ.setdefault("COQUI_TOS_AGREED", "1")
+
+import torch
+from TTS.api import TTS as CoquiTTS
 
 from . import audio
 
+XTTS_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
+
 
 class TTS:
-    def __init__(self, piper_exe: Path, voice: Path) -> None:
-        self.piper_exe = piper_exe
-        self.voice = voice
+    def __init__(
+        self,
+        voice_reference: Optional[Path] = None,
+        voice_speaker: str = "Claribel Dervla",
+        language: str = "en",
+    ) -> None:
+        self.voice_reference = voice_reference if voice_reference and voice_reference.exists() else None
+        self.voice_speaker = voice_speaker
+        self.language = language
+        self._gpu = torch.cuda.is_available()
+        self._engine = CoquiTTS(model_name=XTTS_MODEL, gpu=self._gpu)
 
     def speak(self, text: str) -> None:
         if not text.strip():
@@ -23,18 +51,16 @@ class TTS:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             out = Path(tmp.name)
         try:
-            subprocess.run(
-                [
-                    str(self.piper_exe),
-                    "--model",
-                    str(self.voice),
-                    "--output_file",
-                    str(out),
-                ],
-                input=text.encode("utf-8"),
-                capture_output=True,
-                check=True,
-            )
+            kwargs = {
+                "text": text,
+                "file_path": str(out),
+                "language": self.language,
+            }
+            if self.voice_reference is not None:
+                kwargs["speaker_wav"] = str(self.voice_reference)
+            else:
+                kwargs["speaker"] = self.voice_speaker
+            self._engine.tts_to_file(**kwargs)
             audio.play_wav(out)
         finally:
             out.unlink(missing_ok=True)

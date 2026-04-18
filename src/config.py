@@ -32,8 +32,9 @@ class Config:
     paths: Paths
     wake_model: str
     wake_threshold: float
-    piper_exe: Path
-    piper_voice: Path
+    voice_reference: Path | None
+    voice_speaker: str
+    voice_language: str
     groq_api_key: str
     spotify_client_id: str
     spotify_client_secret: str
@@ -74,12 +75,15 @@ def load() -> Config:
     for p in (home, paths.memory_dir, paths.logs_dir):
         p.mkdir(parents=True, exist_ok=True)
 
+    ref_path_raw = data.get("voice_reference")
+    ref_path = (repo / ref_path_raw) if ref_path_raw else None
     _cached = Config(
         paths=paths,
         wake_model=data.get("wake_model", "hey_jarvis"),
         wake_threshold=float(data.get("wake_threshold", 0.5)),
-        piper_exe=repo / data["piper_exe"],
-        piper_voice=repo / data["piper_voice"],
+        voice_reference=ref_path,
+        voice_speaker=data.get("voice_speaker", "Claribel Dervla"),
+        voice_language=data.get("voice_language", "en"),
         groq_api_key=os.environ.get("GROQ_API_KEY", ""),
         spotify_client_id=os.environ.get("SPOTIFY_CLIENT_ID", ""),
         spotify_client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET", ""),

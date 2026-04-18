@@ -1,5 +1,8 @@
 claude-agent-sdk>=0.1.60
 openwakeword>=0.6.0
+coqui-tts>=0.27.0
+# torch + torchaudio must be installed separately with CUDA wheels:
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 sounddevice>=0.4.7
 numpy>=1.26
 webrtcvad-wheels>=2.0.14

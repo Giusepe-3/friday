@@ -126,7 +126,11 @@ async def summarise_session(brain: Brain, memory: Memory, session: Session) -> N
 
 async def main() -> None:
     cfg = cfg_mod.load()
-    tts = TTS(cfg.piper_exe, cfg.piper_voice)
+    tts = TTS(
+        voice_reference=cfg.voice_reference,
+        voice_speaker=cfg.voice_speaker,
+        language=cfg.voice_language,
+    )
     brain = Brain(model=cfg.claude_model)
     stt = STT(cfg.groq_api_key)
     vad = VAD()
