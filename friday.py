@@ -1,13 +1,13 @@
-"""FRIDAY entrypoint — Phase 3.5 session loop.
-
-Flow: wake → say "Yes, boss." → enter ACTIVE session → loop (record → STT →
-close phrase? ack+exit : brain → TTS) → on close or timeout, re-arm wake."""
+"""FRIDAY entrypoint — Phase 4: Spotify + notes + briefing wired."""
 
 from __future__ import annotations
 
 import asyncio
 import signal
 from datetime import datetime
+
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
 
 from src import audio
 from src import config as cfg_mod
@@ -19,6 +19,21 @@ from src.tts import TTS
 from src.vad import VAD
 from src.wake import listen_for_wake
 from src.tools import state as tool_state
+
+
+def _init_spotify(cfg):
+    if not (cfg.spotify_client_id and cfg.spotify_client_secret):
+        return None
+    return spotipy.Spotify(
+        auth_manager=SpotifyOAuth(
+            client_id=cfg.spotify_client_id,
+            client_secret=cfg.spotify_client_secret,
+            redirect_uri=cfg.spotify_redirect_uri,
+            scope="user-modify-playback-state user-read-playback-state",
+            cache_path=str((cfg.paths.home / ".spotipy_cache")),
+            open_browser=True,
+        )
+    )
 
 
 async def record_until_silence(vad: VAD, max_s: int) -> bytes:
@@ -42,14 +57,7 @@ async def record_until_silence(vad: VAD, max_s: int) -> bytes:
     return bytes(buf)
 
 
-async def session_loop(
-    cfg,
-    brain: Brain,
-    stt: STT,
-    vad: VAD,
-    tts: TTS,
-    session: Session,
-) -> None:
+async def session_loop(cfg, brain, stt, vad, tts, session: Session) -> None:
     while session.state is State.ACTIVE:
         pcm = await record_until_silence(vad, cfg.max_recording_s)
         transcript = await stt.transcribe(pcm, cfg.sample_rate)
@@ -82,7 +90,8 @@ async def main() -> None:
     brain = Brain(model=cfg.claude_model)
     stt = STT(cfg.groq_api_key)
     vad = VAD()
-    tool_state.init(cfg=cfg, speak=tts.speak)
+    sp = _init_spotify(cfg)
+    tool_state.init(cfg=cfg, speak=tts.speak, spotify=sp)
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
