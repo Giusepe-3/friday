@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "friday-tools": {
+      "command": "python",
+      "args": ["-m", "friday_mcp_server"],
+      "cwd": "."
+    }
+  }
+}
