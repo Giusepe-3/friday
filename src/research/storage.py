@@ -46,3 +46,47 @@ class ResearchStorage:
         self.schedule_state_path = self.root / "schedule_state.json"
         for d in (self.notes_dir, self.summaries_dir, self.standups_dir, self.reviews_dir):
             d.mkdir(parents=True, exist_ok=True)
+
+    def append_note(self, topic: str, content: str, when: datetime | None = None) -> Path:
+        when = when or datetime.now()
+        slug = slugify(topic)
+        if not slug:
+            raise ValueError(f"topic slug empty after normalisation: {topic!r}")
+        path = self.notes_dir / f"{slug}.md"
+        existed = path.exists()
+        with path.open("a", encoding="utf-8") as f:
+            if not existed:
+                f.write(f"# {topic}\n\n")
+            f.write(f"## {when.strftime('%Y-%m-%d %H:%M')}\n\n{content.strip()}\n\n")
+        self._index_touch(slug=slug, display=topic, when=when)
+        return path
+
+    def list_topics(self) -> list[dict]:
+        idx = self._read_index()
+        return [
+            {"slug": slug, **meta}
+            for slug, meta in sorted(idx.items(), key=lambda kv: kv[1].get("last_updated", ""), reverse=True)
+        ]
+
+    def _read_index(self) -> dict:
+        if self.index_path.exists():
+            return json.loads(self.index_path.read_text(encoding="utf-8"))
+        return {}
+
+    def _index_touch(self, slug: str, display: str, when: datetime) -> None:
+        idx = self._read_index()
+        entry = idx.get(slug)
+        ts = when.strftime("%Y-%m-%dT%H:%M")
+        if entry is None:
+            idx[slug] = {
+                "display": display,
+                "created_at": ts,
+                "last_updated": ts,
+                "note_count": 1,
+            }
+        else:
+            entry["display"] = display
+            entry["last_updated"] = ts
+            entry["note_count"] = int(entry.get("note_count", 0)) + 1
+            idx[slug] = entry
+        _atomic_write_json(self.index_path, idx)
