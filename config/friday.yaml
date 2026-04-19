@@ -8,7 +8,7 @@ voice_language: en
 sample_rate: 16000
 playback_gain: 1.4    # multiplier applied to all WAV playback; clipped to int16 range
 playback_speed: 1.5   # time-stretch factor (1.0 = natural, 1.5 = 50% faster, pitch preserved)
-silence_timeout_s: 60
+silence_timeout_s: 90        # 1.5 min of no speech → silent re-arm to wake-word
 max_recording_s: 15
 research:
   paper_fetch_allowlist:
@@ -27,12 +27,4 @@ research:
   catchup_window_h: 12
 
 close_phrases:
-  - "that's all friday"
-  - "thats all friday"
-  - "thanks friday"
-  - "thank you friday"
-  - "fine friday"
-  - "goodbye friday"
-  - "bye friday"
-  - "we're done friday"
-  - "were done friday"
+  - "terminate jarvis"
