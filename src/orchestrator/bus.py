@@ -146,6 +146,72 @@ class WorkerBus:
             for line in lines:
                 f.write(f"{ts}\t{source}\t{line}\n")
 
+    def append_inbox(self, header: dict, body: str = "") -> None:
+        """Append a new block to the END of inbox.md (FIFO consumption)."""
+        self.ensure_layout()
+        new_block = dict(header)
+        new_block["body"] = body
+        existing_text = self.inbox_path.read_text(encoding="utf-8") if self.inbox_path.exists() else ""
+        existing_blocks, _bad = _parse_inbox(existing_text)
+        existing_blocks.append(new_block)
+        _atomic_write_text(self.inbox_path, _serialize_inbox(existing_blocks))
+
+    def write_checkpoint(self, checkpoint: dict) -> None:
+        """Write checkpoint JSON to checkpoints/<id>.json."""
+        self.ensure_layout()
+        ck_id = checkpoint["id"]
+        path = self.checkpoints_dir / f"{ck_id}.json"
+        _atomic_write_text(path, json.dumps(checkpoint, indent=2))
+
+    def archive_checkpoint(self, checkpoint_id: str, decision: str, reason: str = "") -> None:
+        """Move checkpoints/<id>.json to checkpoints/resolved/<id>.json with decision recorded."""
+        src = self.checkpoints_dir / f"{checkpoint_id}.json"
+        if not src.exists():
+            return
+        data = json.loads(src.read_text(encoding="utf-8"))
+        data["decision"] = decision
+        data["decision_reason"] = reason
+        data["resolved_at"] = datetime.now().isoformat(timespec="seconds")
+        dst = self.resolved_dir / f"{checkpoint_id}.json"
+        _atomic_write_text(dst, json.dumps(data, indent=2))
+        src.unlink()
+
+    def list_pending_checkpoints(self) -> list[dict]:
+        """Return all unresolved checkpoint dicts (sorted by created_at if present)."""
+        if not self.checkpoints_dir.exists():
+            return []
+        out: list[dict] = []
+        for p in self.checkpoints_dir.glob("*.json"):
+            if p.parent.name == "resolved":
+                continue
+            try:
+                out.append(json.loads(p.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, OSError):
+                continue
+        out.sort(key=lambda c: c.get("created_at", ""))
+        return out
+
+    def write_pid(self, pid: int) -> None:
+        """Write process ID to worker.pid."""
+        self.ensure_layout()
+        _atomic_write_text(self.pid_path, str(pid))
+
+    def read_pid(self) -> int | None:
+        """Read process ID from worker.pid, or None if not present."""
+        if not self.pid_path.exists():
+            return None
+        try:
+            return int(self.pid_path.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            return None
+
+    def clear_pid(self) -> None:
+        """Delete worker.pid file."""
+        try:
+            self.pid_path.unlink()
+        except FileNotFoundError:
+            pass
+
 
 def _parse_inbox(text: str) -> tuple[list[dict], list[str]]:
     """Parse inbox text into [(block_dict, ...), bad_blocks].

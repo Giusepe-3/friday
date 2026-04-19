@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 import tempfile
 from src.orchestrator.bus import _atomic_write_text, WorkerBus
 
@@ -175,3 +176,48 @@ def test_inbox_pop_skips_malformed_block(tmp_path: Path) -> None:
     )
     msg = bus.pop_inbox()
     assert msg["id"] == "good"
+
+
+def test_append_inbox_then_pop_round_trip(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.append_inbox({"id": "x1", "type": "task", "model": "claude-opus-4-7"}, body="do thing")
+    msg = bus.pop_inbox()
+    assert msg["id"] == "x1"
+    assert msg["body"].strip() == "do thing"
+
+
+def test_write_checkpoint(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    ckpt = {"id": "ck1", "task_id": "t1", "tool": "Bash", "command": "git commit", "reason": "x"}
+    bus.write_checkpoint(ckpt)
+    assert (tmp_path / ".friday" / "checkpoints" / "ck1.json").exists()
+    loaded = json.loads((tmp_path / ".friday" / "checkpoints" / "ck1.json").read_text())
+    assert loaded["id"] == "ck1"
+
+
+def test_archive_checkpoint(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.write_checkpoint({"id": "ck1", "task_id": "t1", "tool": "Bash", "command": "git commit", "reason": "x"})
+    bus.archive_checkpoint("ck1", decision="approve")
+    assert not (tmp_path / ".friday" / "checkpoints" / "ck1.json").exists()
+    archived = tmp_path / ".friday" / "checkpoints" / "resolved" / "ck1.json"
+    assert archived.exists()
+    loaded = json.loads(archived.read_text())
+    assert loaded["decision"] == "approve"
+
+
+def test_list_pending_checkpoints(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.write_checkpoint({"id": "ck1", "task_id": "t", "tool": "Bash", "command": "x", "reason": "y"})
+    bus.write_checkpoint({"id": "ck2", "task_id": "t", "tool": "Bash", "command": "z", "reason": "y"})
+    pending = bus.list_pending_checkpoints()
+    ids = sorted(c["id"] for c in pending)
+    assert ids == ["ck1", "ck2"]
+
+
+def test_pid_round_trip(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.write_pid(12345)
+    assert bus.read_pid() == 12345
+    bus.clear_pid()
+    assert bus.read_pid() is None
