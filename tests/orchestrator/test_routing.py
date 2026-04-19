@@ -25,7 +25,7 @@ def test_route_thesis_alias() -> None:
 
 def test_route_research_alias() -> None:
     assert route("update the lit review", WORKERS_CFG) == "research"
-    assert route("check progress on RSI papers", WORKERS_CFG) == "research"
+    assert route("check my research progress", WORKERS_CFG) == "research"
 
 
 def test_route_no_match_returns_none() -> None:

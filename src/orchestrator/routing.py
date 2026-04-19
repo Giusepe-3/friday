@@ -20,12 +20,9 @@ def normalize(s: str) -> str:
 def route(text: str, workers_cfg: dict) -> str | None:
     """Return project key on first alias substring hit. None if no alias matches."""
     norm = normalize(text)
-    norm_words = norm.split()
     for project, w in workers_cfg.items():
         for alias in w.get("aliases", []):
             alias_norm = normalize(alias)
-            alias_words = alias_norm.split()
-            # Check if all words of the alias appear in the text (in order, but not necessarily consecutive)
-            if alias_words and all(word in norm_words for word in alias_words):
+            if alias_norm and alias_norm in norm:
                 return project
     return None
