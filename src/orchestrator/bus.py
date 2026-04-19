@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 
@@ -69,3 +70,45 @@ class WorkerBus:
         current = self.read_state()
         current.update(fields)
         _atomic_write_text(self.state_path, json.dumps(current, indent=2))
+
+    def append_outbox(self, event: dict) -> None:
+        """Append one event as a JSONL line. Auto-injects `ts` if missing."""
+        self.ensure_layout()
+        evt = dict(event)
+        evt.setdefault("ts", datetime.now().isoformat(timespec="seconds"))
+        line = json.dumps(evt, ensure_ascii=False) + "\n"
+        with self.outbox_path.open("a", encoding="utf-8") as f:
+            f.write(line)
+
+    def tail_outbox(self, limit: int = 10, types: list[str] | None = None) -> list[dict]:
+        """Return last `limit` events (optionally filtered by `types`).
+
+        Malformed lines are skipped silently and recorded to logs/parser_errors.log.
+        """
+        if not self.outbox_path.exists():
+            return []
+        events: list[dict] = []
+        bad: list[str] = []
+        with self.outbox_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    bad.append(line)
+                    continue
+                if types is None or evt.get("type") in types:
+                    events.append(evt)
+        if bad:
+            self._log_parser_errors("outbox", bad)
+        return events[-limit:]
+
+    def _log_parser_errors(self, source: str, lines: list[str]) -> None:
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self.logs_dir / "parser_errors.log"
+        with log_path.open("a", encoding="utf-8") as f:
+            ts = datetime.now().isoformat(timespec="seconds")
+            for line in lines:
+                f.write(f"{ts}\t{source}\t{line}\n")

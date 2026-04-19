@@ -55,3 +55,51 @@ def test_state_partial_update_preserves_other_fields(tmp_path: Path) -> None:
     assert state["model"] == "claude-opus-4-7"   # preserved
     assert state["status"] == "working"          # updated
     assert state["current_task"] == "x"          # added
+
+
+def test_outbox_append_then_tail(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.append_outbox({"type": "ack", "task_id": "abc"})
+    bus.append_outbox({"type": "pulse", "status": "working"})
+    events = bus.tail_outbox(limit=10)
+    assert len(events) == 2
+    assert events[0]["type"] == "ack"
+    assert events[1]["type"] == "pulse"
+    # ts auto-injected
+    assert "ts" in events[0]
+
+
+def test_outbox_tail_limit(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    for i in range(5):
+        bus.append_outbox({"type": "pulse", "i": i})
+    events = bus.tail_outbox(limit=2)
+    assert len(events) == 2
+    assert events[0]["i"] == 3
+    assert events[1]["i"] == 4
+
+
+def test_outbox_tail_filter_by_type(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.append_outbox({"type": "ack", "task_id": "a"})
+    bus.append_outbox({"type": "pulse"})
+    bus.append_outbox({"type": "ack", "task_id": "b"})
+    events = bus.tail_outbox(limit=10, types=["ack"])
+    assert len(events) == 2
+    assert all(e["type"] == "ack" for e in events)
+
+
+def test_outbox_skips_malformed_lines(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.ensure_layout()
+    # Manually write a corrupt line
+    bus.outbox_path.write_text(
+        '{"type":"ack","task_id":"a","ts":"x"}\n'
+        "this is not json\n"
+        '{"type":"pulse","ts":"y"}\n',
+        encoding="utf-8",
+    )
+    events = bus.tail_outbox(limit=10)
+    assert len(events) == 2
+    assert events[0]["type"] == "ack"
+    assert events[1]["type"] == "pulse"
