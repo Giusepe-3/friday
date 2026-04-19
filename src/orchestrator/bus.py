@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import yaml
 from datetime import datetime
 from pathlib import Path
 
@@ -105,6 +106,38 @@ class WorkerBus:
             self._log_parser_errors("outbox", bad)
         return events[-limit:]
 
+    def pop_inbox(self, allowed_types: set[str] | None = None) -> dict | None:
+        """Pop oldest inbox block matching `allowed_types` (or any type if None).
+
+        Returns parsed dict with 'body' field for content. Atomically rewrites
+        inbox without the popped block. Skipped malformed blocks are logged
+        and dropped.
+        """
+        if not self.inbox_path.exists():
+            return None
+        text = self.inbox_path.read_text(encoding="utf-8")
+        blocks, bad = _parse_inbox(text)
+        if bad:
+            self._log_parser_errors("inbox", bad)
+        if not blocks:
+            if text.strip():
+                # All blocks were malformed; clear inbox
+                _atomic_write_text(self.inbox_path, "")
+            return None
+
+        chosen_idx = None
+        for i, block in enumerate(blocks):
+            if allowed_types is None or block.get("type") in allowed_types:
+                chosen_idx = i
+                break
+        if chosen_idx is None:
+            return None
+
+        chosen = blocks.pop(chosen_idx)
+        new_text = _serialize_inbox(blocks)
+        _atomic_write_text(self.inbox_path, new_text)
+        return chosen
+
     def _log_parser_errors(self, source: str, lines: list[str]) -> None:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.logs_dir / "parser_errors.log"
@@ -112,3 +145,73 @@ class WorkerBus:
             ts = datetime.now().isoformat(timespec="seconds")
             for line in lines:
                 f.write(f"{ts}\t{source}\t{line}\n")
+
+
+def _parse_inbox(text: str) -> tuple[list[dict], list[str]]:
+    """Parse inbox text into [(block_dict, ...), bad_blocks].
+
+    Block format:
+        ---
+        key: value
+        ...
+        ---
+        body content (may span multiple lines)
+    Blocks are separated by the next `---` on its own line.
+    """
+    blocks: list[dict] = []
+    bad: list[str] = []
+    # Split on lines that are exactly "---" — preserve content after each marker
+    lines = text.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        # Skip blank lines between blocks
+        while i < n and not lines[i].strip():
+            i += 1
+        if i >= n:
+            break
+        if lines[i].strip() != "---":
+            # Stray content before a marker — collect as bad
+            stray_start = i
+            while i < n and lines[i].strip() != "---":
+                i += 1
+            bad.append("\n".join(lines[stray_start:i]))
+            continue
+        # Header marker
+        i += 1
+        header_start = i
+        while i < n and lines[i].strip() != "---":
+            i += 1
+        if i >= n:
+            bad.append("\n".join(lines[header_start - 1:]))
+            break
+        header_text = "\n".join(lines[header_start:i])
+        i += 1  # skip closing marker
+        # Body extends until next "---" marker (or EOF)
+        body_start = i
+        while i < n and lines[i].strip() != "---":
+            i += 1
+        body_text = "\n".join(lines[body_start:i])
+
+        try:
+            header = yaml.safe_load(header_text) or {}
+        except yaml.YAMLError:
+            bad.append(f"---\n{header_text}\n---\n{body_text}")
+            continue
+        if not isinstance(header, dict):
+            bad.append(f"---\n{header_text}\n---\n{body_text}")
+            continue
+        header["body"] = body_text
+        blocks.append(header)
+    return blocks, bad
+
+
+def _serialize_inbox(blocks: list[dict]) -> str:
+    """Inverse of _parse_inbox: emit blocks back to inbox.md form."""
+    parts: list[str] = []
+    for b in blocks:
+        body = b.get("body", "")
+        header = {k: v for k, v in b.items() if k != "body"}
+        header_text = yaml.safe_dump(header, sort_keys=False).strip()
+        parts.append(f"---\n{header_text}\n---\n{body}")
+    return "\n".join(parts) + ("\n" if parts else "")

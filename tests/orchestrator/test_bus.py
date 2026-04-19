@@ -103,3 +103,75 @@ def test_outbox_skips_malformed_lines(tmp_path: Path) -> None:
     assert len(events) == 2
     assert events[0]["type"] == "ack"
     assert events[1]["type"] == "pulse"
+
+
+def test_inbox_pop_empty(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    assert bus.pop_inbox() is None
+
+
+def test_inbox_pop_single_block(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.ensure_layout()
+    bus.inbox_path.write_text(
+        "---\n"
+        "id: abc-123\n"
+        "type: task\n"
+        "model: claude-opus-4-7\n"
+        "effort: high\n"
+        "---\n"
+        "Polish §3 of the paper.\n",
+        encoding="utf-8",
+    )
+    msg = bus.pop_inbox()
+    assert msg is not None
+    assert msg["id"] == "abc-123"
+    assert msg["type"] == "task"
+    assert msg["model"] == "claude-opus-4-7"
+    assert msg["effort"] == "high"
+    assert msg["body"].strip() == "Polish §3 of the paper."
+    # Inbox now empty
+    assert bus.pop_inbox() is None
+
+
+def test_inbox_pop_multiple_blocks_returns_oldest(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.ensure_layout()
+    bus.inbox_path.write_text(
+        "---\nid: first\ntype: task\n---\nfirst body\n"
+        "---\nid: second\ntype: task\n---\nsecond body\n",
+        encoding="utf-8",
+    )
+    msg1 = bus.pop_inbox()
+    assert msg1["id"] == "first"
+    msg2 = bus.pop_inbox()
+    assert msg2["id"] == "second"
+    assert bus.pop_inbox() is None
+
+
+def test_inbox_pop_with_filter_skips_non_matching(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.ensure_layout()
+    bus.inbox_path.write_text(
+        "---\nid: t1\ntype: task\n---\nbody\n"
+        "---\nid: c1\ntype: checkpoint_decision\n---\napprove\n",
+        encoding="utf-8",
+    )
+    # Caller wants only checkpoint_decision; task block stays in inbox
+    msg = bus.pop_inbox(allowed_types={"checkpoint_decision"})
+    assert msg["id"] == "c1"
+    # Now task block should still be there
+    msg2 = bus.pop_inbox()
+    assert msg2["id"] == "t1"
+
+
+def test_inbox_pop_skips_malformed_block(tmp_path: Path) -> None:
+    bus = WorkerBus(tmp_path / ".friday")
+    bus.ensure_layout()
+    bus.inbox_path.write_text(
+        "---\nnot valid yaml: [oops\n---\nbody1\n"
+        "---\nid: good\ntype: task\n---\nbody2\n",
+        encoding="utf-8",
+    )
+    msg = bus.pop_inbox()
+    assert msg["id"] == "good"
