@@ -1,5 +1,6 @@
-claude_model: claude-sonnet-4-6
-shim_model: sonnet                      # voice shim model — Sonnet 4.6 (quality) over Haiku (speed)
+claude_model: claude-opus-4-7
+shim_model: claude-opus-4-7             # voice shim model — Opus 4.7 everywhere
+friday_effort: high
 wake_model: hey_jarvis
 wake_threshold: 0.5
 # voice_reference: voices/kerry.wav   # uncomment once you drop a Kerry clip
@@ -28,3 +29,45 @@ research:
 
 close_phrases:
   - "terminate jarvis"
+
+workers:
+  paper:
+    repo: C:/Users/leona/Documents/GitHub/Learning/Verification_Paper
+    aliases: [paper, draft, verification, azr, "the paper"]
+    default_model: claude-opus-4-7
+    default_effort: high
+    autostart: false
+    pulse_interval_working_s: 30
+    pulse_interval_idle_s: 300
+    checkpoint_triggers:
+      bash_regex:
+        - '^git commit'
+        - '^git push'
+        - 'runpod'
+        - 'bash setup_.*pod'
+        - 'wandb init'
+  thesis:
+    repo: C:/Users/leona/Documents/GitHub/Learning/dgm_bachelor_thesis
+    aliases: [thesis, experiment, dgm, "darwin godel", "coding agent", polyglot]
+    default_model: claude-opus-4-7
+    default_effort: high
+    autostart: false
+    pulse_interval_working_s: 30
+    pulse_interval_idle_s: 300
+    checkpoint_triggers:
+      bash_regex:
+        - '^git commit'
+        - '^git push'
+        - 'docker run'
+  research:
+    repo: C:/Users/leona/Documents/GitHub/Learning/AI-Research-Project
+    aliases: [research, literature, "lit review", progress, "the notes"]
+    default_model: claude-opus-4-7
+    default_effort: high
+    autostart: false
+    pulse_interval_working_s: 30
+    pulse_interval_idle_s: 300
+    checkpoint_triggers:
+      bash_regex:
+        - '^git commit'
+        - '^git push'

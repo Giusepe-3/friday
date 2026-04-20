@@ -38,6 +38,7 @@ from src.session import State, is_close_phrase
 from src.stt import STT
 from src.tools import ALLOWED_TOOL_NAMES, build_server
 from src.tools import state as tool_state
+from src.orchestrator.manager import WorkerManager
 from src.tts import TTS, speak_streaming
 from src.vad import VAD
 from src.wake import listen_for_wake
@@ -169,6 +170,133 @@ async def record_until_silence(vad: VAD, max_s: int, min_speech_frames: int = 10
     return bytes(buf)
 
 
+async def _checkpoint_drain_loop(
+    workers_cfg: dict,
+    pending_q: asyncio.Queue,
+    poll_interval_s: float = 5.0,
+    stop: asyncio.Event | None = None,
+) -> None:
+    """Poll every poll_interval_s: push new checkpoints AND new errors
+    to pending_q. Dedupes checkpoints by id, errors by per-project ts."""
+    from src.orchestrator.bus import WorkerBus  # local import: avoid boot-order issues
+    seen_ck_ids: set[str] = set()
+    seen_error_ts: dict[str, str] = {}
+    # Prime error dedup with current last-ts per project so historical errors
+    # (from prior FRIDAY sessions) don't surface on wake. Only errors AFTER
+    # this moment get announced.
+    for project in workers_cfg.keys():
+        try:
+            bus_dir = Path(workers_cfg[project]["repo"]) / ".friday"
+            bus = WorkerBus(bus_dir)
+            errs = bus.tail_outbox(limit=5, types=["error"])
+            if errs:
+                seen_error_ts[project] = errs[-1].get("ts", "")
+        except Exception:
+            pass
+    while True:
+        if stop is not None and stop.is_set():
+            return
+        for project in workers_cfg.keys():
+            try:
+                bus_dir = Path(workers_cfg[project]["repo"]) / ".friday"
+                bus = WorkerBus(bus_dir)
+                # Checkpoints
+                for ck in bus.list_pending_checkpoints():
+                    if ck["id"] in seen_ck_ids:
+                        continue
+                    seen_ck_ids.add(ck["id"])
+                    await pending_q.put({"kind": "checkpoint", "project": project, "checkpoint": ck})
+                # Errors (most recent only, per project)
+                errs = bus.tail_outbox(limit=5, types=["error"])
+                if errs:
+                    last = errs[-1]
+                    last_ts = last.get("ts", "")
+                    if last_ts and seen_error_ts.get(project) != last_ts:
+                        seen_error_ts[project] = last_ts
+                        await pending_q.put({"kind": "error", "project": project, "error": last})
+            except Exception as e:
+                print(f"[shim] checkpoint drain error ({project}): {e}", flush=True)
+        await asyncio.sleep(poll_interval_s)
+
+
+async def _drain_interrupts(
+    pending_q: asyncio.Queue,
+    brain, tts, stt, vad, cfg, turns: list[dict], home: Path,
+) -> None:
+    """Dispatch one pending item per call — either checkpoint (with full
+    approve/deny UX) or error (one-sentence announce, no reply required)."""
+    if pending_q.empty():
+        return
+    item = await pending_q.get()
+    kind = item.get("kind")
+    if kind == "checkpoint":
+        await _surface_checkpoint(item, brain, tts, stt, vad, cfg, turns, home, pending_q)
+    elif kind == "error":
+        await _surface_error(item, brain, tts, home)
+    else:
+        print(f"[shim] unknown interrupt kind: {kind!r}", flush=True)
+
+
+async def _surface_checkpoint(
+    item: dict, brain, tts, stt, vad, cfg, turns: list[dict], home: Path,
+    pending_q: asyncio.Queue,
+) -> None:
+    """Surface one pending checkpoint with full approve/deny/show/later UX."""
+    project = item["project"]
+    ck = item["checkpoint"]
+    interrupt_prompt = (
+        f"INTERRUPT: A worker checkpoint is pending. Surface it to Leo in ONE sentence "
+        f"with action choices (approve, deny, show me, later).\n\n"
+        f"project={project}\n"
+        f"tool={ck.get('tool')}\n"
+        f"command={ck.get('command')}\n"
+        f"file_path={ck.get('file_path')}\n"
+        f"reason={ck.get('reason')}\n"
+        f"context={ck.get('context')}"
+    )
+    spoken = await speak_streaming(tts, brain.ask_streaming(interrupt_prompt))
+    _append_turn_log(home, "friday_interrupt", spoken)
+
+    pcm = await record_until_silence(vad, cfg.max_recording_s)
+    if not pcm:
+        await pending_q.put(item)
+        return
+    transcript = await stt.transcribe(pcm, cfg.sample_rate)
+    if not transcript.strip() or _looks_like_hallucination(transcript):
+        await pending_q.put(item)
+        return
+    _append_turn_log(home, "user_interrupt_reply", transcript)
+
+    decision_prompt = (
+        f"User responded to the interrupt: {transcript!r}\n"
+        f"For checkpoint id={ck['id']!r} on project={project!r}, take ONE of:\n"
+        f"- approve → call mcp__friday__approve_checkpoint(project, checkpoint_id={ck['id']!r}, decision='approve')\n"
+        f"- deny → call with decision='deny' and pass user's reason\n"
+        f"- show me → call mcp__friday__query_worker and read back details, then re-ask\n"
+        f"- later → reply 'noted, I'll re-surface it' and don't call any tool\n"
+        f"Reply in ONE sentence."
+    )
+    reply = await speak_streaming(tts, brain.ask_streaming(decision_prompt))
+    _append_turn_log(home, "friday_interrupt_action", reply)
+
+    if "later" in transcript.lower() or "wait" in transcript.lower():
+        await pending_q.put(item)
+
+
+async def _surface_error(item: dict, brain, tts, home: Path) -> None:
+    """Surface a worker error in one sentence. No user reply required."""
+    err = item["error"]
+    project = item["project"]
+    prompt = (
+        f"INTERRUPT: A worker hit an error. Surface to Leo in ONE sentence.\n"
+        f"project={project}\n"
+        f"task_id={err.get('task_id')}\n"
+        f"error={err.get('error')}\n"
+    )
+    spoken = await speak_streaming(tts, brain.ask_streaming(prompt))
+    _append_turn_log(home, "friday_interrupt_error", spoken)
+
+
 class ShimBrain:
     """Persistent ClaudeSDKClient per FRIDAY-session.
 
@@ -182,7 +310,7 @@ class ShimBrain:
         self._client: ClaudeSDKClient | None = None
         self._server = build_server()
 
-    async def start(self) -> None:
+    async def start(self, effort: str = "high") -> None:
         await self.stop()
         options = ClaudeAgentOptions(
             model=self._model,
@@ -192,6 +320,7 @@ class ShimBrain:
             setting_sources=["user", "project"],
             mcp_servers={"friday": self._server},
             allowed_tools=ALLOWED_TOOL_NAMES,
+            effort=effort,
         )
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
@@ -285,6 +414,20 @@ async def main() -> None:
             print(f"[shim] research init failed: {e}")
     scheduler = AlarmScheduler(cfg.paths.alarms_json, speak=tts.speak)
     await scheduler.start()
+    # Build worker manager from cfg.workers (convert WorkerConfig → dict shape
+    # the Phase 3 WorkerManager expects: {"repo": Path, "default_model": str,
+    # "default_effort": str, "bash_regex": list[str]})
+    workers_cfg_for_mgr = {
+        project: {
+            "repo": w.repo,
+            "default_model": w.default_model,
+            "default_effort": w.default_effort,
+            "bash_regex": w.bash_regex,
+        }
+        for project, w in cfg.workers.items()
+    }
+    worker_manager = WorkerManager(workers_cfg_for_mgr)
+
     tool_state.init(
         cfg=cfg,
         speak=tts.speak,
@@ -292,8 +435,15 @@ async def main() -> None:
         scheduler=scheduler,
         memory=memory,
         research=research,
+        worker_manager=worker_manager,
     )
-    print(f"[shim] tool_state wired — spotify={'on' if sp else 'off'}, research={'on' if research else 'off'}, alarms=on", flush=True)
+    print(f"[shim] tool_state wired — spotify={'on' if sp else 'off'}, research={'on' if research else 'off'}, alarms=on, workers={len(cfg.workers)}", flush=True)
+
+    # Autostart any worker with autostart=True
+    for project, w in cfg.workers.items():
+        if w.autostart:
+            worker_manager.spawn(project)
+            print(f"[shim] autostarted worker: {project}", flush=True)
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -303,10 +453,18 @@ async def main() -> None:
     except NotImplementedError:
         pass
 
+    pending_interrupts: asyncio.Queue = asyncio.Queue()
+    drain_task = asyncio.create_task(_checkpoint_drain_loop(
+        workers_cfg=workers_cfg_for_mgr,
+        pending_q=pending_interrupts,
+        poll_interval_s=5.0,
+        stop=stop,
+    ))
+
     print(f"[shim] ready — persistent ClaudeSDKClient, model={cfg.shim_model}, CLAUDE.md+.mcp.json auto-loaded from cwd", flush=True)
 
     print("[shim] starting persistent brain session…", flush=True)
-    await brain.start()
+    await brain.start(effort=cfg.friday_effort)
     print("[shim] brain ready — persists across wake cycles, fresh on process restart", flush=True)
 
     try:
@@ -319,7 +477,7 @@ async def main() -> None:
             turns: list[dict] = []
             closed = False
             try:
-                await _conversation_loop(brain, stt, vad, tts, cfg, turns, cfg.paths.home)
+                await _conversation_loop(brain, stt, vad, tts, cfg, turns, cfg.paths.home, pending_interrupts)
             except _CloseSession:
                 closed = True
 
@@ -328,31 +486,36 @@ async def main() -> None:
             if closed:
                 break
     finally:
+        drain_task.cancel()
         await brain.stop()
+        worker_manager.kill_all()
+        print("[shim] all workers terminated", flush=True)
 
 
-async def _conversation_loop(brain, stt, vad, tts, cfg, turns: list[dict], home: Path) -> None:
+async def _conversation_loop(
+    brain, stt, vad, tts, cfg, turns: list[dict], home: Path,
+    pending_interrupts: asyncio.Queue,
+) -> None:
     """Inner loop: VAD-bounded record → STT → brain → TTS, until idle timeout.
 
     Returns normally on idle timeout (silent re-arm to outer wake loop).
     Raises ``_CloseSession`` on close-phrase to exit the whole process."""
     last_activity = datetime.now()
     while True:
+        await _drain_interrupts(pending_interrupts, brain, tts, stt, vad, cfg, turns, home)
         idle_s = (datetime.now() - last_activity).total_seconds()
         if idle_s > cfg.silence_timeout_s:
             print(f"[shim] idle {idle_s:.0f}s > {cfg.silence_timeout_s}s, re-arming wake", flush=True)
             return
-        print("[shim] listening (VAD-bounded)…", flush=True)
         pcm = await record_until_silence(vad, cfg.max_recording_s)
         if not pcm:
             continue
         transcript = await stt.transcribe(pcm, cfg.sample_rate)
-        print(f"[shim] transcript: {transcript!r}", flush=True)
         if not transcript.strip():
             continue
         if _looks_like_hallucination(transcript):
-            print("[shim] filtered hallucination", flush=True)
             continue
+        print(f"[shim] transcript: {transcript!r}", flush=True)
         _append_turn_log(home, "user", transcript)
         turns.append({"user": transcript})
         if is_close_phrase(transcript, cfg.close_phrases):
