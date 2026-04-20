@@ -181,10 +181,20 @@ async def _run_task(
         bus.append_outbox({"type": "task_complete", "task_id": task_id, "summary": summary})
         state_ref.update({"status": "idle", "current_task": None, "current_task_id": None})
         bus.write_state(**state_ref)
-    except Exception as e:
-        bus.append_outbox({"type": "error", "task_id": task_id, "error": f"{type(e).__name__}: {e}"})
+    except BaseException as e:
+        # BaseException so CancelledError / SDK-raised non-Exception errors still land in outbox.
+        import traceback
+        tb = traceback.format_exc()
+        bus.append_outbox({
+            "type": "error",
+            "task_id": task_id,
+            "error": f"{type(e).__name__}: {e}",
+            "traceback": tb,
+        })
         state_ref["status"] = "error"
         bus.write_state(status="error")
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
 
 
 def _check_duplicate_and_claim(bus: WorkerBus) -> None:
