@@ -71,3 +71,18 @@ workers:
       bash_regex:
         - '^git commit'
         - '^git push'
+  friday:
+    repo: C:/Users/leona/Documents/GitHub/friday
+    aliases: [friday, yourself, "the shim", "your code", "the assistant", self]
+    default_model: claude-opus-4-7
+    default_effort: high
+    autostart: false
+    pulse_interval_working_s: 30
+    pulse_interval_idle_s: 300
+    checkpoint_triggers:
+      bash_regex:
+        - '^git commit'
+        - '^pip install'
+        - '^uv pip'
+        - 'friday_voice\.py'
+        - 'pytest.*--fix'
