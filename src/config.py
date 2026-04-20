@@ -28,6 +28,19 @@ class Paths:
 
 
 @dataclass(frozen=True)
+class WorkerConfig:
+    project: str
+    repo: Path
+    aliases: list[str]
+    default_model: str
+    default_effort: str
+    autostart: bool
+    pulse_interval_working_s: int
+    pulse_interval_idle_s: int
+    bash_regex: list[str]  # extracted from checkpoint_triggers.bash_regex
+
+
+@dataclass(frozen=True)
 class Config:
     paths: Paths
     wake_model: str
@@ -52,6 +65,8 @@ class Config:
     research_paper_fetch_timeout_s: int
     research_schedules: dict
     research_catchup_window_h: int
+    friday_effort: str
+    workers: dict[str, WorkerConfig]
 
 
 _cached: Config | None = None
@@ -85,6 +100,23 @@ def load() -> Config:
 
     ref_path_raw = data.get("voice_reference")
     ref_path = (repo / ref_path_raw) if ref_path_raw else None
+
+    workers_raw = data.get("workers", {}) or {}
+    workers: dict[str, WorkerConfig] = {}
+    for project, w in workers_raw.items():
+        triggers = w.get("checkpoint_triggers", {}) or {}
+        workers[project] = WorkerConfig(
+            project=project,
+            repo=Path(w["repo"]),
+            aliases=list(w.get("aliases", [])),
+            default_model=str(w.get("default_model", "claude-opus-4-7")),
+            default_effort=str(w.get("default_effort", "high")),
+            autostart=bool(w.get("autostart", True)),
+            pulse_interval_working_s=int(w.get("pulse_interval_working_s", 30)),
+            pulse_interval_idle_s=int(w.get("pulse_interval_idle_s", 300)),
+            bash_regex=list(triggers.get("bash_regex", [])),
+        )
+
     _cached = Config(
         paths=paths,
         wake_model=data.get("wake_model", "hey_jarvis"),
@@ -121,6 +153,8 @@ def load() -> Config:
         research_catchup_window_h=int(
             (data.get("research") or {}).get("catchup_window_h", 12)
         ),
+        friday_effort=str(data.get("friday_effort", "max")),
+        workers=workers,
     )
     return _cached
 
