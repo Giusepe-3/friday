@@ -38,6 +38,7 @@ from src.session import State, is_close_phrase
 from src.stt import STT
 from src.tools import ALLOWED_TOOL_NAMES, build_server
 from src.tools import state as tool_state
+from src.orchestrator.manager import WorkerManager
 from src.tts import TTS, speak_streaming
 from src.vad import VAD
 from src.wake import listen_for_wake
@@ -182,7 +183,7 @@ class ShimBrain:
         self._client: ClaudeSDKClient | None = None
         self._server = build_server()
 
-    async def start(self) -> None:
+    async def start(self, effort: str = "high") -> None:
         await self.stop()
         options = ClaudeAgentOptions(
             model=self._model,
@@ -192,6 +193,7 @@ class ShimBrain:
             setting_sources=["user", "project"],
             mcp_servers={"friday": self._server},
             allowed_tools=ALLOWED_TOOL_NAMES,
+            effort=effort,
         )
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
@@ -285,6 +287,20 @@ async def main() -> None:
             print(f"[shim] research init failed: {e}")
     scheduler = AlarmScheduler(cfg.paths.alarms_json, speak=tts.speak)
     await scheduler.start()
+    # Build worker manager from cfg.workers (convert WorkerConfig → dict shape
+    # the Phase 3 WorkerManager expects: {"repo": Path, "default_model": str,
+    # "default_effort": str, "bash_regex": list[str]})
+    workers_cfg_for_mgr = {
+        project: {
+            "repo": w.repo,
+            "default_model": w.default_model,
+            "default_effort": w.default_effort,
+            "bash_regex": w.bash_regex,
+        }
+        for project, w in cfg.workers.items()
+    }
+    worker_manager = WorkerManager(workers_cfg_for_mgr)
+
     tool_state.init(
         cfg=cfg,
         speak=tts.speak,
@@ -292,8 +308,15 @@ async def main() -> None:
         scheduler=scheduler,
         memory=memory,
         research=research,
+        worker_manager=worker_manager,
     )
-    print(f"[shim] tool_state wired — spotify={'on' if sp else 'off'}, research={'on' if research else 'off'}, alarms=on", flush=True)
+    print(f"[shim] tool_state wired — spotify={'on' if sp else 'off'}, research={'on' if research else 'off'}, alarms=on, workers={len(cfg.workers)}", flush=True)
+
+    # Autostart any worker with autostart=True
+    for project, w in cfg.workers.items():
+        if w.autostart:
+            worker_manager.spawn(project)
+            print(f"[shim] autostarted worker: {project}", flush=True)
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -306,7 +329,7 @@ async def main() -> None:
     print(f"[shim] ready — persistent ClaudeSDKClient, model={cfg.shim_model}, CLAUDE.md+.mcp.json auto-loaded from cwd", flush=True)
 
     print("[shim] starting persistent brain session…", flush=True)
-    await brain.start()
+    await brain.start(effort=cfg.friday_effort)
     print("[shim] brain ready — persists across wake cycles, fresh on process restart", flush=True)
 
     try:
@@ -329,6 +352,8 @@ async def main() -> None:
                 break
     finally:
         await brain.stop()
+        worker_manager.kill_all()
+        print("[shim] all workers terminated", flush=True)
 
 
 async def _conversation_loop(brain, stt, vad, tts, cfg, turns: list[dict], home: Path) -> None:
