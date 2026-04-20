@@ -176,10 +176,11 @@ async def _checkpoint_drain_loop(
     poll_interval_s: float = 5.0,
     stop: asyncio.Event | None = None,
 ) -> None:
-    """Poll all workers' checkpoints every `poll_interval_s` and push new
-    ones onto `pending_q`. Tracks seen IDs to avoid duplicate pushes."""
+    """Poll every poll_interval_s: push new checkpoints AND new errors
+    to pending_q. Dedupes checkpoints by id, errors by per-project ts."""
     from src.orchestrator.bus import WorkerBus  # local import: avoid boot-order issues
-    seen_ids: set[str] = set()
+    seen_ck_ids: set[str] = set()
+    seen_error_ts: dict[str, str] = {}
     while True:
         if stop is not None and stop.is_set():
             return
@@ -187,11 +188,20 @@ async def _checkpoint_drain_loop(
             try:
                 bus_dir = Path(workers_cfg[project]["repo"]) / ".friday"
                 bus = WorkerBus(bus_dir)
+                # Checkpoints
                 for ck in bus.list_pending_checkpoints():
-                    if ck["id"] in seen_ids:
+                    if ck["id"] in seen_ck_ids:
                         continue
-                    seen_ids.add(ck["id"])
-                    await pending_q.put({"project": project, "checkpoint": ck})
+                    seen_ck_ids.add(ck["id"])
+                    await pending_q.put({"kind": "checkpoint", "project": project, "checkpoint": ck})
+                # Errors (most recent only, per project)
+                errs = bus.tail_outbox(limit=5, types=["error"])
+                if errs:
+                    last = errs[-1]
+                    last_ts = last.get("ts", "")
+                    if last_ts and seen_error_ts.get(project) != last_ts:
+                        seen_error_ts[project] = last_ts
+                        await pending_q.put({"kind": "error", "project": project, "error": last})
             except Exception as e:
                 print(f"[shim] checkpoint drain error ({project}): {e}", flush=True)
         await asyncio.sleep(poll_interval_s)
@@ -201,11 +211,25 @@ async def _drain_interrupts(
     pending_q: asyncio.Queue,
     brain, tts, stt, vad, cfg, turns: list[dict], home: Path,
 ) -> None:
-    """Surface one pending checkpoint per call (FIFO). If user says 'later'
-    or replies with silence/noise, push the item back for resurfacing."""
+    """Dispatch one pending item per call — either checkpoint (with full
+    approve/deny UX) or error (one-sentence announce, no reply required)."""
     if pending_q.empty():
         return
     item = await pending_q.get()
+    kind = item.get("kind")
+    if kind == "checkpoint":
+        await _surface_checkpoint(item, brain, tts, stt, vad, cfg, turns, home, pending_q)
+    elif kind == "error":
+        await _surface_error(item, brain, tts, home)
+    else:
+        print(f"[shim] unknown interrupt kind: {kind!r}", flush=True)
+
+
+async def _surface_checkpoint(
+    item: dict, brain, tts, stt, vad, cfg, turns: list[dict], home: Path,
+    pending_q: asyncio.Queue,
+) -> None:
+    """Surface one pending checkpoint with full approve/deny/show/later UX."""
     project = item["project"]
     ck = item["checkpoint"]
     interrupt_prompt = (
@@ -245,6 +269,20 @@ async def _drain_interrupts(
 
     if "later" in transcript.lower() or "wait" in transcript.lower():
         await pending_q.put(item)
+
+
+async def _surface_error(item: dict, brain, tts, home: Path) -> None:
+    """Surface a worker error in one sentence. No user reply required."""
+    err = item["error"]
+    project = item["project"]
+    prompt = (
+        f"INTERRUPT: A worker hit an error. Surface to Leo in ONE sentence.\n"
+        f"project={project}\n"
+        f"task_id={err.get('task_id')}\n"
+        f"error={err.get('error')}\n"
+    )
+    spoken = await speak_streaming(tts, brain.ask_streaming(prompt))
+    _append_turn_log(home, "friday_interrupt_error", spoken)
 
 
 class ShimBrain:
