@@ -65,13 +65,22 @@ except Exception as _e:
     RESEARCH_TOOLS = []
     RESEARCH_ALLOWED = []
 
+try:
+    from . import orchestrator_tool as _orchestrator_tool
+    ORCHESTRATOR_TOOLS = list(_orchestrator_tool.ORCHESTRATOR_TOOLS)
+    ORCHESTRATOR_ALLOWED = [f"mcp__friday__{t.name}" for t in ORCHESTRATOR_TOOLS]
+except Exception as _e:
+    print(f"[tools] orchestrator tools unavailable — core FRIDAY will still run: {_e}")
+    ORCHESTRATOR_TOOLS = []
+    ORCHESTRATOR_ALLOWED = []
 
-ALLOWED_TOOL_NAMES = CORE_ALLOWED + RESEARCH_ALLOWED
+
+ALLOWED_TOOL_NAMES = CORE_ALLOWED + RESEARCH_ALLOWED + ORCHESTRATOR_ALLOWED
 
 
 def build_server():
     return create_sdk_mcp_server(
         name="friday",
         version="1.0.0",
-        tools=CORE_TOOLS + RESEARCH_TOOLS,
+        tools=CORE_TOOLS + RESEARCH_TOOLS + ORCHESTRATOR_TOOLS,
     )
