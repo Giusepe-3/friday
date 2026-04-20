@@ -181,6 +181,18 @@ async def _checkpoint_drain_loop(
     from src.orchestrator.bus import WorkerBus  # local import: avoid boot-order issues
     seen_ck_ids: set[str] = set()
     seen_error_ts: dict[str, str] = {}
+    # Prime error dedup with current last-ts per project so historical errors
+    # (from prior FRIDAY sessions) don't surface on wake. Only errors AFTER
+    # this moment get announced.
+    for project in workers_cfg.keys():
+        try:
+            bus_dir = Path(workers_cfg[project]["repo"]) / ".friday"
+            bus = WorkerBus(bus_dir)
+            errs = bus.tail_outbox(limit=5, types=["error"])
+            if errs:
+                seen_error_ts[project] = errs[-1].get("ts", "")
+        except Exception:
+            pass
     while True:
         if stop is not None and stop.is_set():
             return
