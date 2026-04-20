@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
 from .bus import WorkerBus
 from .checkpoint_gate import build_checkpoint_gate
@@ -173,9 +173,11 @@ async def _run_task(
 
     summary = ""
     try:
-        async for event in query(prompt=task_text, options=options):
-            if isinstance(event, ResultMessage):
-                summary = getattr(event, "result", "") or summary
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(task_text)
+            async for event in client.receive_response():
+                if isinstance(event, ResultMessage):
+                    summary = getattr(event, "result", "") or summary
         bus.append_outbox({"type": "task_complete", "task_id": task_id, "summary": summary})
         state_ref.update({"status": "idle", "current_task": None, "current_task_id": None})
         bus.write_state(**state_ref)
