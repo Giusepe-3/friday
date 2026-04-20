@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import pytest
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from src.orchestrator.bus import WorkerBus
 from src.orchestrator.checkpoint_gate import build_checkpoint_gate
 
@@ -29,7 +30,8 @@ def test_gate_allows_safe_bash(tmp_path: Path) -> None:
     bus = WorkerBus(tmp_path / ".friday")
     gate = _gate_for(bus, extra=[r"^git commit"])
     result = asyncio.run(gate("Bash", {"command": "ls -la"}, {"task_id": "t1"}))
-    assert result == {"behavior": "allow", "updatedInput": {"command": "ls -la"}}
+    assert isinstance(result, PermissionResultAllow)
+    assert result.updated_input == {"command": "ls -la"}
 
 
 def test_gate_halts_on_extra_regex_then_approve(tmp_path: Path) -> None:
@@ -54,7 +56,7 @@ def test_gate_halts_on_extra_regex_then_approve(tmp_path: Path) -> None:
         return await gate_task
 
     result = asyncio.run(caller())
-    assert result["behavior"] == "allow"
+    assert isinstance(result, PermissionResultAllow)
     # Checkpoint archived after resolution
     resolved = list((tmp_path / ".friday" / "checkpoints" / "resolved").glob("*.json"))
     assert len(resolved) == 1
@@ -81,8 +83,8 @@ def test_gate_universal_regex_always_halts(tmp_path: Path) -> None:
         return await gate_task
 
     result = asyncio.run(caller())
-    assert result["behavior"] == "deny"
-    assert "not pushing" in result["message"]
+    assert isinstance(result, PermissionResultDeny)
+    assert "not pushing" in result.message
 
 
 def test_gate_scope_files_blocks_out_of_scope_write(tmp_path: Path) -> None:
@@ -105,7 +107,7 @@ def test_gate_scope_files_blocks_out_of_scope_write(tmp_path: Path) -> None:
         return await gate_task
 
     result = asyncio.run(caller())
-    assert result["behavior"] == "deny"
+    assert isinstance(result, PermissionResultDeny)
 
 
 def test_gate_scope_files_allows_in_scope_write(tmp_path: Path) -> None:
@@ -114,7 +116,7 @@ def test_gate_scope_files_allows_in_scope_write(tmp_path: Path) -> None:
     result = asyncio.run(
         gate("Edit", {"file_path": "paper/sec3.tex", "old_string": "x", "new_string": "y"}, {"task_id": "t1"})
     )
-    assert result["behavior"] == "allow"
+    assert isinstance(result, PermissionResultAllow)
 
 
 def test_gate_timeout_returns_deny(tmp_path: Path) -> None:
@@ -122,5 +124,5 @@ def test_gate_timeout_returns_deny(tmp_path: Path) -> None:
     gate = _gate_for(bus, extra=[r"^git commit"])
     # Don't append a decision — let it time out
     result = asyncio.run(gate("Bash", {"command": "git commit -m x"}, {"task_id": "t1"}))
-    assert result["behavior"] == "deny"
-    assert "timeout" in result["message"].lower()
+    assert isinstance(result, PermissionResultDeny)
+    assert "timeout" in result.message.lower()

@@ -17,10 +17,12 @@ import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
 from .bus import WorkerBus
 
 
-CanUseToolFn = Callable[[str, dict, dict], Awaitable[dict]]
+CanUseToolFn = Callable[[str, dict, Any], Awaitable[Any]]
 
 WRITE_TOOLS = {"Write", "Edit", "NotebookEdit"}
 
@@ -55,7 +57,7 @@ def build_checkpoint_gate(
     scope_set = set(scope_files) if scope_files else None
     captured_task_id = task_id
 
-    async def can_use_tool(tool_name: str, tool_input: dict, context: dict) -> dict:
+    async def can_use_tool(tool_name: str, tool_input: dict, context: Any) -> Any:
         reason: str | None = None
         if tool_name == "Bash":
             cmd = _bash_command(tool_input)
@@ -68,10 +70,20 @@ def build_checkpoint_gate(
             if wt is not None and scope_set is not None and wt not in scope_set:
                 reason = "out-of-scope-write"
         if reason is None:
-            return {"behavior": "allow", "updatedInput": tool_input}
+            return PermissionResultAllow(updated_input=tool_input)
 
         # Halt and request approval
         ck_id = f"ck-{uuid.uuid4()}"
+        ctx_repr: dict[str, Any] = {}
+        if context is not None:
+            # ToolPermissionContext is a dataclass; also tolerate plain dict (tests).
+            if isinstance(context, dict):
+                ctx_repr = dict(context)
+            else:
+                for attr in ("tool_use_id", "agent_id", "suggestions"):
+                    val = getattr(context, attr, None)
+                    if val is not None:
+                        ctx_repr[attr] = str(val) if attr != "suggestions" else [str(s) for s in (val or [])]
         bus.write_checkpoint({
             "id": ck_id,
             "task_id": captured_task_id,
@@ -79,7 +91,7 @@ def build_checkpoint_gate(
             "command": _bash_command(tool_input) if tool_name == "Bash" else None,
             "file_path": _write_target(tool_name, tool_input),
             "reason": reason,
-            "context": dict(context) if context else {},
+            "context": ctx_repr,
             "created_at": datetime.now().isoformat(timespec="seconds"),
         })
         decision = await _await_decision(
@@ -89,12 +101,12 @@ def build_checkpoint_gate(
         )
         if decision is None:
             bus.archive_checkpoint(ck_id, decision="deny", reason="timeout")
-            return {"behavior": "deny", "message": f"checkpoint timeout after {decision_timeout_s}s"}
+            return PermissionResultDeny(message=f"checkpoint timeout after {decision_timeout_s}s")
         verdict, message = decision
         bus.archive_checkpoint(ck_id, decision=verdict, reason=message)
         if verdict == "approve":
-            return {"behavior": "allow", "updatedInput": tool_input}
-        return {"behavior": "deny", "message": message or "denied"}
+            return PermissionResultAllow(updated_input=tool_input)
+        return PermissionResultDeny(message=message or "denied")
 
     return can_use_tool
 

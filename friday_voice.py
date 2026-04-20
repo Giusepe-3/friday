@@ -495,17 +495,15 @@ async def _conversation_loop(
         if idle_s > cfg.silence_timeout_s:
             print(f"[shim] idle {idle_s:.0f}s > {cfg.silence_timeout_s}s, re-arming wake", flush=True)
             return
-        print("[shim] listening (VAD-bounded)…", flush=True)
         pcm = await record_until_silence(vad, cfg.max_recording_s)
         if not pcm:
             continue
         transcript = await stt.transcribe(pcm, cfg.sample_rate)
-        print(f"[shim] transcript: {transcript!r}", flush=True)
         if not transcript.strip():
             continue
         if _looks_like_hallucination(transcript):
-            print("[shim] filtered hallucination", flush=True)
             continue
+        print(f"[shim] transcript: {transcript!r}", flush=True)
         _append_turn_log(home, "user", transcript)
         turns.append({"user": transcript})
         if is_close_phrase(transcript, cfg.close_phrases):
