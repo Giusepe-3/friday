@@ -56,7 +56,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 _HALLUCINATION_SHORT = {
     "thank you", "thank you.", "thanks", "thanks.", "bye", "bye.",
     "you", "you.", "thanks for watching", "thanks for watching.",
-    "okay", "okay.", "ok", "ok.", ".", "",
+    "okay", "okay.", "ok", "ok.", "amen", "amen.", ".", "",
 }
 
 
