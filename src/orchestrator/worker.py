@@ -101,6 +101,7 @@ async def _inbox_loop(
             await asyncio.sleep(2)
             continue
         msg_type = msg.get("type")
+        print(f"[worker] inbox msg: type={msg_type!r} id={msg.get('id')!r}", flush=True)
         if msg_type == "terminate":
             raise WorkerStop()
         if msg_type == "pause":
@@ -247,6 +248,7 @@ async def _amain(args: argparse.Namespace) -> int:
     })
     bus.write_state(**state_ref)
     bus.append_outbox({"type": "ack", "note": "worker_started", "project": args.project})
+    print(f"[worker] started project={args.project} model={default_model} effort={default_effort}", flush=True)
 
     pulse_task = asyncio.create_task(
         _pulse_loop(bus, repo, pulse_working_s, pulse_idle_s, state_ref)
@@ -280,6 +282,8 @@ async def _amain(args: argparse.Namespace) -> int:
         )
         for t in done:
             exc = t.exception()
+            name = "inbox_task" if t is inbox_task else "stop_task"
+            print(f"[worker] task {name} finished; exc={type(exc).__name__ if exc else 'None'}: {exc}", flush=True)
             if isinstance(exc, WorkerStop):
                 pass
             elif exc is not None:
@@ -292,6 +296,7 @@ async def _amain(args: argparse.Namespace) -> int:
         bus.append_outbox({"type": "terminated", "reason": "shutdown"})
         bus.write_state(status="terminated")
         bus.clear_pid()
+        print("[worker] shutdown complete", flush=True)
     return 0
 
 
