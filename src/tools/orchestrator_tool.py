@@ -9,6 +9,7 @@ Phase 4 plumbs `state.cfg.workers` + `state.worker_manager`; until then the
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 from claude_agent_sdk import tool
@@ -20,9 +21,14 @@ from .state import get as state_get
 def _require_orchestrator(need_manager: bool = False):
     """Return (workers_cfg, manager_or_None, None) or (None, None, error_payload)."""
     s = state_get()
-    workers_cfg = getattr(s.cfg, "workers", None) if s.cfg is not None else None
-    if workers_cfg is None:
+    workers_cfg_raw = getattr(s.cfg, "workers", None) if s.cfg is not None else None
+    if workers_cfg_raw is None:
         return None, None, {"content": [{"type": "text", "text": "orchestrator not initialised: workers config missing"}]}
+    # Convert dataclass values (WorkerConfig) to plain dicts so Phase 3 impls can subscript.
+    workers_cfg = {
+        k: (dataclasses.asdict(v) if dataclasses.is_dataclass(v) and not isinstance(v, type) else v)
+        for k, v in workers_cfg_raw.items()
+    }
     if need_manager:
         manager = getattr(s, "worker_manager", None)
         if manager is None:

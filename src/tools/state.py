@@ -19,6 +19,7 @@ class ToolState:
     speak: Optional[Callable[[str], None]] = None
     memory: Any = None
     research: Any = None
+    worker_manager: Any = None
 
 
 _state = ToolState()
@@ -31,6 +32,7 @@ def init(
     speak: Optional[Callable[[str], None]] = None,
     memory: Any = None,
     research: Any = None,
+    worker_manager: Any = None,
 ) -> None:
     _state.cfg = cfg
     _state.scheduler = scheduler
@@ -38,6 +40,7 @@ def init(
     _state.speak = speak
     _state.memory = memory
     _state.research = research
+    _state.worker_manager = worker_manager
 
 
 def get() -> ToolState:
@@ -51,3 +54,4 @@ def reset() -> None:
     _state.speak = None
     _state.memory = None
     _state.research = None
+    _state.worker_manager = None
