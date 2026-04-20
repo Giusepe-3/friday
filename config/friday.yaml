@@ -1,6 +1,6 @@
 claude_model: claude-opus-4-7
 shim_model: claude-opus-4-7             # voice shim model — Opus 4.7 everywhere
-friday_effort: max
+friday_effort: high
 wake_model: hey_jarvis
 wake_threshold: 0.5
 # voice_reference: voices/kerry.wav   # uncomment once you drop a Kerry clip
@@ -36,7 +36,7 @@ workers:
     aliases: [paper, draft, verification, azr, "the paper"]
     default_model: claude-opus-4-7
     default_effort: high
-    autostart: true
+    autostart: false
     pulse_interval_working_s: 30
     pulse_interval_idle_s: 300
     checkpoint_triggers:
@@ -51,7 +51,7 @@ workers:
     aliases: [thesis, experiment, dgm, "darwin godel", "coding agent", polyglot]
     default_model: claude-opus-4-7
     default_effort: high
-    autostart: true
+    autostart: false
     pulse_interval_working_s: 30
     pulse_interval_idle_s: 300
     checkpoint_triggers:
@@ -64,7 +64,7 @@ workers:
     aliases: [research, literature, "lit review", progress, "the notes"]
     default_model: claude-opus-4-7
     default_effort: high
-    autostart: true
+    autostart: false
     pulse_interval_working_s: 30
     pulse_interval_idle_s: 300
     checkpoint_triggers:
