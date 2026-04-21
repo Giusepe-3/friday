@@ -14,6 +14,7 @@ from . import (
     notes_tool,
     spotify_tool,
     util_tool,
+    whatsapp_tool,
 )
 
 
@@ -30,6 +31,7 @@ CORE_TOOLS = [
     alarm_tool.cancel_alarm,
     alarm_tool.list_alarms,
     memory_tool.remember_fact,
+    whatsapp_tool.send_whatsapp,
 ]
 
 CORE_ALLOWED = [
@@ -45,6 +47,7 @@ CORE_ALLOWED = [
     "mcp__friday__cancel_alarm",
     "mcp__friday__list_alarms",
     "mcp__friday__remember_fact",
+    "mcp__friday__send_whatsapp",
 ]
 
 try:
